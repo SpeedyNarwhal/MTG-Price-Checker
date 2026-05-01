@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from mtg_price_checker.domain.enums import CardCondition, Finish, ResultStatus
 from mtg_price_checker.domain.price_result import PriceResult
 from mtg_price_checker.domain.requested_card import RequestedCard
@@ -13,6 +15,7 @@ def choose_lowest_nm_in_stock_quote(
         quote
         for quote in quotes
         if quote.in_stock
+        and quote.price_cad is not None
         and quote.condition == CardCondition.NEAR_MINT
         and _finish_matches(requested_card.finish_preference, quote.finish)
     ]
@@ -20,7 +23,7 @@ def choose_lowest_nm_in_stock_quote(
     if not valid_quotes:
         return None
 
-    return min(valid_quotes, key=lambda quote: quote.price_cad)
+    return min(valid_quotes, key=_required_price)
 
 
 def build_price_result(
@@ -88,3 +91,9 @@ def _finish_matches(preference: Finish, actual: Finish) -> bool:
         return True
 
     return preference == actual
+
+
+def _required_price(quote: StoreQuote) -> Decimal:
+    if quote.price_cad is None:
+        raise ValueError("Expected quote to have a price.")
+    return quote.price_cad

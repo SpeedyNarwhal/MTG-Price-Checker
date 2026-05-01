@@ -25,3 +25,10 @@ def test_parse_card_line_ignores_blank_lines() -> None:
 
 def test_parse_card_line_ignores_comments() -> None:
     assert parse_card_line("# commander staples") is None
+
+
+def test_parse_card_line_removes_bom_character() -> None:
+    card = parse_card_line("\ufeffSol Ring")
+
+    assert card is not None
+    assert card.normalized_name == "Sol Ring"

@@ -4,7 +4,7 @@ from pathlib import Path
 from mtg_price_checker.input.decklist_parser import parse_card_file
 from mtg_price_checker.output.csv_writer import write_price_matrix_csv
 from mtg_price_checker.services.price_checker import check_prices
-from mtg_price_checker.stores.fake import build_demo_stores
+from mtg_price_checker.services.store_registry import build_stores
 
 
 def main() -> None:
@@ -20,6 +20,13 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--stores",
+        nargs="+",
+        default=["danireon"],
+        help="Stores to check. Supported: danireon, demo.",
+    )
+
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -30,7 +37,7 @@ def main() -> None:
     args = parser.parse_args()
 
     requested_cards = parse_card_file(args.input_file)
-    stores = build_demo_stores()
+    stores = build_stores(args.stores)
     results = check_prices(requested_cards, stores)
 
     write_price_matrix_csv(

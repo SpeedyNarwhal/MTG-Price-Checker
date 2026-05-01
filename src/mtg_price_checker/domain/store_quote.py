@@ -11,7 +11,7 @@ class StoreQuote:
     matched_card_name: str
     condition: CardCondition
     finish: Finish
-    price_cad: Decimal
+    price_cad: Decimal | None
     in_stock: bool
     product_url: str | None = None
     quantity_available: int | None = None

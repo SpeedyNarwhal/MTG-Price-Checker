@@ -37,9 +37,29 @@ def parse_card_line(line: str) -> RequestedCard | None:
 def parse_card_file(path: Path) -> list[RequestedCard]:
     cards: list[RequestedCard] = []
 
-    for line in path.read_text(encoding="utf-8").splitlines():
+    text = _read_text_file(path)
+
+    for line in text.splitlines():
         card = parse_card_line(line)
         if card is not None:
             cards.append(card)
 
     return cards
+
+
+def _read_text_file(path: Path) -> str:
+    encodings_to_try = ["utf-8-sig", "utf-8", "utf-16"]
+
+    for encoding in encodings_to_try:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+
+    raise UnicodeDecodeError(
+        "utf-8",
+        b"",
+        0,
+        1,
+        f"Could not read {path} as one of: {', '.join(encodings_to_try)}",
+    )

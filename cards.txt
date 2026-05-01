@@ -1,3 +1,4 @@
 Sol Ring
-2 Arcane Signet
+Arcane Signet
 Esper Sentinel
+Blood Crypt
