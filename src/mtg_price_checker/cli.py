@@ -4,7 +4,7 @@ from pathlib import Path
 from mtg_price_checker.input.decklist_parser import parse_card_file
 from mtg_price_checker.output.csv_writer import write_audit_csv, write_price_matrix_csv
 from mtg_price_checker.services.price_checker import check_prices
-from mtg_price_checker.services.store_registry import build_stores
+from mtg_price_checker.services.store_registry import StoreBuildOptions, build_stores
 
 
 def main() -> None:
@@ -41,10 +41,48 @@ def main() -> None:
         help="Optional audit CSV output path with one row per card/store result.",
     )
 
+    parser.add_argument(
+        "--max-products-per-card",
+        type=_positive_int,
+        default=None,
+        help=(
+            "Maximum number of candidate product pages to check per card per store. "
+            "Defaults: Danireon=2, Silver Goblin=5."
+        ),
+    )
+
+    parser.add_argument(
+        "--request-delay-seconds",
+        type=_non_negative_float,
+        default=8.0,
+        help="Minimum delay between live HTTP requests. Default: 8.",
+    )
+
+    parser.add_argument(
+        "--cache-ttl-hours",
+        type=_non_negative_float,
+        default=24.0,
+        help="How long cached HTTP responses stay valid. Default: 24.",
+    )
+
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable HTTP cache reads/writes for this run.",
+    )
+
     args = parser.parse_args()
 
     requested_cards = parse_card_file(args.input_file)
-    stores = build_stores(args.stores)
+
+    store_options = StoreBuildOptions(
+        max_products_per_card=args.max_products_per_card,
+        request_delay_seconds=args.request_delay_seconds,
+        cache_ttl_seconds=int(args.cache_ttl_hours * 60 * 60),
+        use_cache=not args.no_cache,
+    )
+
+    stores = build_stores(args.stores, options=store_options)
     results = check_prices(requested_cards, stores)
 
     write_price_matrix_csv(
@@ -65,3 +103,21 @@ def main() -> None:
         )
 
         print(f"Wrote audit CSV to {args.audit}")
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("Value must be a positive integer.")
+
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("Value must be zero or greater.")
+
+    return parsed
