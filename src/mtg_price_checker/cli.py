@@ -23,7 +23,7 @@ def main() -> None:
         "--stores",
         nargs="+",
         default=["danireon"],
-        help="Stores to check. Supported: danireon, demo.",
+        help="Stores to check. Supported: danireon, silvergoblin, demo.",
     )
 
     parser.add_argument(

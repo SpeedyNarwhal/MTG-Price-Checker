@@ -1,7 +1,9 @@
 import hashlib
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 import requests
@@ -44,6 +46,10 @@ class HttpClient:
             cache_path.write_text(response_text, encoding="utf-8")
 
         return response_text
+
+    def get_json(self, url: str, params: dict[str, str] | None = None) -> Any:
+        response_text = self.get_text(url, params=params)
+        return json.loads(response_text)
 
     def _get_text_uncached(self, url: str, params: dict[str, str] | None = None) -> str:
         last_error: requests.HTTPError | None = None
