@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from mtg_price_checker.input.decklist_parser import parse_card_file
-from mtg_price_checker.output.csv_writer import write_price_matrix_csv
+from mtg_price_checker.output.csv_writer import write_audit_csv, write_price_matrix_csv
 from mtg_price_checker.services.price_checker import check_prices
 from mtg_price_checker.services.store_registry import build_stores
 
@@ -34,6 +34,13 @@ def main() -> None:
         help="CSV output path.",
     )
 
+    parser.add_argument(
+        "--audit",
+        type=Path,
+        default=None,
+        help="Optional audit CSV output path with one row per card/store result.",
+    )
+
     args = parser.parse_args()
 
     requested_cards = parse_card_file(args.input_file)
@@ -48,3 +55,13 @@ def main() -> None:
     )
 
     print(f"Wrote price matrix to {args.output}")
+
+    if args.audit is not None:
+        write_audit_csv(
+            output_path=args.audit,
+            requested_cards=requested_cards,
+            stores=stores,
+            results=results,
+        )
+
+        print(f"Wrote audit CSV to {args.audit}")

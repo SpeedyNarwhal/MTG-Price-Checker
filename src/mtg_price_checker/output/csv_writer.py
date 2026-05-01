@@ -31,6 +31,47 @@ def write_price_matrix_csv(
             writer.writerow(row)
 
 
+def write_audit_csv(
+    output_path: Path,
+    requested_cards: list[RequestedCard],
+    stores: list[StoreAdapter],
+    results: dict[str, dict[str, PriceResult]],
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fieldnames = [
+        "Card",
+        "Store",
+        "Status",
+        "Price CAD",
+        "Product URL",
+        "Notes",
+    ]
+
+    with output_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for card in requested_cards:
+            for store in stores:
+                result = results[card.normalized_name][store.store_id]
+
+                writer.writerow(
+                    {
+                        "Card": card.normalized_name,
+                        "Store": store.display_name,
+                        "Status": result.status.value,
+                        "Price CAD": (
+                            f"{result.lowest_nm_price_cad:.2f}"
+                            if result.lowest_nm_price_cad is not None
+                            else ""
+                        ),
+                        "Product URL": result.product_url or "",
+                        "Notes": result.notes or "",
+                    }
+                )
+
+
 def _format_cell(result: PriceResult) -> str:
     if result.status == ResultStatus.FOUND and result.lowest_nm_price_cad is not None:
         return f"${result.lowest_nm_price_cad:.2f}"

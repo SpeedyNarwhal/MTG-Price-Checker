@@ -62,7 +62,6 @@ class DanireonStoreAdapter(StoreAdapter):
 
         product_urls = _extract_product_urls(search_html)
 
-
         quotes: list[StoreQuote] = []
 
         for product_url in product_urls[: self._max_products_to_check]:
