@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+import requests
 from bs4 import BeautifulSoup
 
 from mtg_price_checker.domain.enums import CardCondition, Finish
@@ -28,7 +29,7 @@ class SilverGoblinStoreAdapter(StoreAdapter):
     def __init__(
         self,
         http_client: HttpClient | None = None,
-        max_products_to_check: int = 10,
+        max_products_to_check: int = 5,
     ) -> None:
         self._http_client = http_client or HttpClient()
         self._max_products_to_check = max_products_to_check
@@ -61,6 +62,18 @@ class SilverGoblinStoreAdapter(StoreAdapter):
                 quotes.extend(
                     parse_silver_goblin_product_json(
                         product_json=product_json,
+                        product_url=product_url,
+                        requested_card=requested_card,
+                    )
+                )
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    raise
+
+                product_html = self._http_client.get_text(product_url)
+                quotes.extend(
+                    parse_silver_goblin_product_page_html(
+                        html=product_html,
                         product_url=product_url,
                         requested_card=requested_card,
                     )

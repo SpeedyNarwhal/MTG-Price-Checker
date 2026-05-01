@@ -15,9 +15,9 @@ _SECONDS_IN_ONE_DAY = 24 * 60 * 60
 class HttpClientConfig:
     timeout_seconds: int = 20
     user_agent: str = "mtg-price-checker/0.1 personal-use price checker"
-    min_seconds_between_requests: float = 3.0
-    max_retries: int = 1
-    retry_backoff_seconds: float = 10.0
+    min_seconds_between_requests: float = 8.0
+    max_retries: int = 2
+    retry_backoff_seconds: float = 45.0
     cache_dir: Path = Path(".cache/http")
     use_cache: bool = True
     cache_ttl_seconds: int = _SECONDS_IN_ONE_DAY
