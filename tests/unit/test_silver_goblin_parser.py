@@ -124,6 +124,32 @@ def test_parse_silver_goblin_product_json_detects_foil_variant() -> None:
     assert quotes[0].finish == Finish.FOIL
 
 
+def test_parse_silver_goblin_product_json_treats_non_foil_variant_as_nonfoil() -> None:
+    product_json = {
+        "title": "Arcane Signet (237) Non-Foil - Commander 2020",
+        "variants": [
+            {
+                "title": "Near Mint Non-Foil",
+                "price": 149,
+                "available": True,
+            }
+        ],
+    }
+
+    requested_card = RequestedCard(
+        input_name="Arcane Signet",
+        normalized_name="Arcane Signet",
+    )
+
+    quotes = parse_silver_goblin_product_json(
+        product_json=product_json,
+        product_url="https://silvergoblin.cards/products/arcane-signet",
+        requested_card=requested_card,
+    )
+
+    assert quotes[0].finish == Finish.NONFOIL
+
+
 def test_parse_silver_goblin_html_fallback_with_nm_unavailable() -> None:
     html = """
     <html>

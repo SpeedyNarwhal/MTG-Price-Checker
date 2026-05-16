@@ -308,7 +308,12 @@ def _extract_condition(value: str) -> CardCondition | None:
 
 
 def _extract_finish(value: str) -> Finish:
-    if "foil" in value.lower():
+    normalized = value.lower()
+
+    if re.search(r"\bnon[-\s]?foil\b", normalized):
+        return Finish.NONFOIL
+
+    if re.search(r"\bfoil\b", normalized):
         return Finish.FOIL
 
     return Finish.NONFOIL

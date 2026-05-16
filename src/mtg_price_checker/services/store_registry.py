@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from mtg_price_checker.infra.http_client import HttpClient, HttpClientConfig
 from mtg_price_checker.stores.base import StoreAdapter
 from mtg_price_checker.stores.danireon import DanireonStoreAdapter
+from mtg_price_checker.stores.facetoface import FaceToFaceStoreAdapter
 from mtg_price_checker.stores.fake import build_demo_stores
 from mtg_price_checker.stores.silvergoblin import SilverGoblinStoreAdapter
 
@@ -46,6 +47,13 @@ def build_stores(
         elif normalized_store_id in {"silvergoblin", "silver-goblin", "silver_goblin"}:
             stores.append(
                 SilverGoblinStoreAdapter(
+                    http_client=http_client,
+                    max_products_to_check=options.max_products_per_card or 5,
+                )
+            )
+        elif normalized_store_id in {"facetoface", "face-to-face", "face_to_face", "f2f"}:
+            stores.append(
+                FaceToFaceStoreAdapter(
                     http_client=http_client,
                     max_products_to_check=options.max_products_per_card or 5,
                 )
