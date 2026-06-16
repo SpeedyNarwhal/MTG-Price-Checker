@@ -1,7 +1,6 @@
 import re
 from decimal import Decimal
 from typing import Any
-from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -11,16 +10,13 @@ from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
 from mtg_price_checker.infra.http_client import HttpClient
 from mtg_price_checker.stores.base import StoreAdapter
+from mtg_price_checker.stores.shopify_common import (
+    parse_shopify_condition_variants,
+    search_product_urls,
+    to_shopify_product_json_url,
+)
 
 _SILVER_GOBLIN_BASE_URL = "https://silvergoblin.cards"
-
-_CONDITION_LABELS = {
-    "Near Mint": CardCondition.NEAR_MINT,
-    "Lightly Played": CardCondition.LIGHTLY_PLAYED,
-    "Moderately Played": CardCondition.MODERATELY_PLAYED,
-    "Heavily Played": CardCondition.HEAVILY_PLAYED,
-    "Damaged": CardCondition.DAMAGED,
-}
 
 _SET_AND_COLLECTOR_PATTERN = re.compile(r"\((?P<collector_number>[A-Z0-9]+)\)")
 
@@ -43,22 +39,22 @@ class SilverGoblinStoreAdapter(StoreAdapter):
         return "Silver Goblin"
 
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
-        search_html = self._http_client.get_text(
-            f"{_SILVER_GOBLIN_BASE_URL}/search",
-            params={
-                "q": requested_card.normalized_name,
-                "type": "product",
-            },
+        product_urls = search_product_urls(
+            self._http_client,
+            _SILVER_GOBLIN_BASE_URL,
+            requested_card.normalized_name,
+            self._max_products_to_check,
         )
-
-        product_urls = _extract_product_urls(search_html)
         quotes: list[StoreQuote] = []
 
         for product_url in product_urls[: self._max_products_to_check]:
-            product_json_url = _to_shopify_product_json_url(product_url)
+            product_json_url = to_shopify_product_json_url(product_url, _SILVER_GOBLIN_BASE_URL)
 
             try:
-                product_json = self._http_client.get_json(product_json_url)
+                product_json = self._http_client.get_json(
+                    product_json_url,
+                    referer=f"{_SILVER_GOBLIN_BASE_URL}/",
+                )
                 quotes.extend(
                     parse_silver_goblin_product_json(
                         product_json=product_json,
@@ -67,10 +63,13 @@ class SilverGoblinStoreAdapter(StoreAdapter):
                     )
                 )
             except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 429:
+                if exc.response is not None and exc.response.status_code in {403, 429}:
                     raise
 
-                product_html = self._http_client.get_text(product_url)
+                product_html = self._http_client.get_text(
+                    product_url,
+                    referer=f"{_SILVER_GOBLIN_BASE_URL}/",
+                )
                 quotes.extend(
                     parse_silver_goblin_product_page_html(
                         html=product_html,
@@ -79,7 +78,10 @@ class SilverGoblinStoreAdapter(StoreAdapter):
                     )
                 )
             except Exception:
-                product_html = self._http_client.get_text(product_url)
+                product_html = self._http_client.get_text(
+                    product_url,
+                    referer=f"{_SILVER_GOBLIN_BASE_URL}/",
+                )
                 quotes.extend(
                     parse_silver_goblin_product_page_html(
                         html=product_html,
@@ -96,87 +98,15 @@ def parse_silver_goblin_product_json(
     product_url: str,
     requested_card: RequestedCard,
 ) -> list[StoreQuote]:
-    title = _safe_string(product_json.get("title"))
-
-    if title is None:
-        return []
-
-    matched_card_name = _extract_card_name_from_title(title)
-
-    if not _card_names_match(requested_card.normalized_name, matched_card_name):
-        return []
-
-    collector_number = _extract_collector_number(title)
-    default_finish = _extract_finish(title)
-    variants = product_json.get("variants")
-
-    if not isinstance(variants, list):
-        return []
-
-    quotes: list[StoreQuote] = []
-
-    for variant in variants:
-        if not isinstance(variant, dict):
-            continue
-
-        variant_title = _safe_string(variant.get("title")) or ""
-        condition = _extract_condition(variant_title)
-
-        if condition is None:
-            continue
-
-        finish = _extract_finish(variant_title)
-        if finish == Finish.NONFOIL:
-            finish = default_finish
-
-        available = bool(variant.get("available"))
-        price = _extract_price_from_variant(variant)
-
-        quotes.append(
-            StoreQuote(
-                store_id="silvergoblin",
-                requested_card_name=requested_card.normalized_name,
-                matched_card_name=matched_card_name,
-                condition=condition,
-                finish=finish,
-                price_cad=price,
-                in_stock=available and price is not None,
-                product_url=product_url,
-                collector_number=collector_number,
-                raw_title=title,
-                confidence_score=1.0,
-            )
-        )
-
-    if quotes:
-        return quotes
-
-    # Some Silver Goblin singles appear to use a single/default Shopify variant
-    # instead of condition-labelled variants. For those, treat the product as NM.
-    for variant in variants:
-        if not isinstance(variant, dict):
-            continue
-
-        available = bool(variant.get("available"))
-        price = _extract_price_from_variant(variant)
-
-        quotes.append(
-            StoreQuote(
-                store_id="silvergoblin",
-                requested_card_name=requested_card.normalized_name,
-                matched_card_name=matched_card_name,
-                condition=CardCondition.NEAR_MINT,
-                finish=default_finish,
-                price_cad=price,
-                in_stock=available and price is not None,
-                product_url=product_url,
-                collector_number=collector_number,
-                raw_title=title,
-                confidence_score=0.8,
-            )
-        )
-
-    return quotes
+    return parse_shopify_condition_variants(
+        product_json,
+        product_url,
+        requested_card,
+        store_id="silvergoblin",
+        extract_card_name_from_title=_extract_card_name_from_title,
+        extract_collector_number=_extract_collector_number,
+        default_finish_from_title=_extract_finish,
+    )
 
 
 def parse_silver_goblin_product_page_html(
@@ -200,9 +130,6 @@ def parse_silver_goblin_product_page_html(
     finish = _extract_finish(title)
     collector_number = _extract_collector_number(title)
 
-    # Conservative fallback:
-    # If the page explicitly says Near Mint is sold out/unavailable, mark it out of stock.
-    # Otherwise, only mark as in stock if the page has Add to cart and some stock text.
     near_mint_unavailable = re.search(
         r"Near Mint\s+Variant sold out or unavailable",
         page_text,
@@ -227,37 +154,6 @@ def parse_silver_goblin_product_page_html(
             confidence_score=0.7,
         )
     ]
-
-
-def _extract_product_urls(html: str) -> list[str]:
-    soup = BeautifulSoup(html, "html.parser")
-    urls: list[str] = []
-
-    for link in soup.find_all("a", href=True):
-        href_value = link.get("href")
-
-        if not isinstance(href_value, str):
-            continue
-
-        if "/products/" not in href_value:
-            continue
-
-        absolute_url = urljoin(_SILVER_GOBLIN_BASE_URL, href_value).split("?")[0]
-
-        if absolute_url not in urls:
-            urls.append(absolute_url)
-
-    return urls
-
-
-def _to_shopify_product_json_url(product_url: str) -> str:
-    parsed = urlparse(product_url)
-    path = parsed.path.rstrip("/")
-
-    if path.endswith(".js"):
-        return product_url
-
-    return f"{_SILVER_GOBLIN_BASE_URL}{path}.js"
 
 
 def _extract_title(soup: BeautifulSoup) -> str | None:
@@ -297,16 +193,6 @@ def _extract_collector_number(title: str) -> str | None:
     return match.group("collector_number")
 
 
-def _extract_condition(value: str) -> CardCondition | None:
-    normalized_value = _simple_normalize(value)
-
-    for label, condition in _CONDITION_LABELS.items():
-        if _simple_normalize(label) in normalized_value:
-            return condition
-
-    return None
-
-
 def _extract_finish(value: str) -> Finish:
     normalized = value.lower()
 
@@ -317,32 +203,6 @@ def _extract_finish(value: str) -> Finish:
         return Finish.FOIL
 
     return Finish.NONFOIL
-
-
-def _extract_price_from_variant(variant: dict[str, Any]) -> Decimal | None:
-    raw_price = variant.get("price")
-
-    if isinstance(raw_price, int):
-        return Decimal(raw_price) / Decimal("100")
-
-    if isinstance(raw_price, float):
-        return Decimal(str(raw_price))
-
-    if isinstance(raw_price, str):
-        cleaned = raw_price.replace("$", "").replace("CAD", "").strip()
-
-        try:
-            value = Decimal(cleaned)
-        except Exception:
-            return None
-
-        # Shopify product JSON often gives cents as a numeric string.
-        if value >= Decimal("100"):
-            return value / Decimal("100")
-
-        return value
-
-    return None
 
 
 def _extract_regular_price(page_text: str) -> Decimal | None:
@@ -360,10 +220,3 @@ def _card_names_match(requested_name: str, matched_name: str) -> bool:
 
 def _simple_normalize(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
-
-
-def _safe_string(value: Any) -> str | None:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-
-    return None

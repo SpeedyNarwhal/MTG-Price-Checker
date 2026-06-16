@@ -67,6 +67,7 @@ Current adapters:
 - `danireon.py`
 - `silvergoblin.py`
 - `facetoface.py`
+- `shopify_common.py` (shared Shopify JSON helpers)
 
 ### `services/price_checker.py`
 
@@ -140,46 +141,35 @@ HTTP errors, parsing failures, unexpected response shapes, etc.
 
 # Danireon
 
-Strategy:
+Strategy (JSON-first):
 
-1. Search page request:
-   `/search?q=...&type=product`
-2. Parse product URLs from HTML
-3. Visit product pages
-4. Parse condition/price/inventory
+1. Search via Shopify Predictive Search:
+   `/search/suggest.json?q=...&resources[type]=product&resources[limit]=N`
+2. Parse product URLs from JSON (HTML search fallback only if suggest is empty)
+3. Fetch product details via `/products/{handle}.js`
+4. Parse condition/price/inventory from variant JSON (HTML product page fallback)
 
 Notes:
 
-- Uses Shopify-style product pages
-- Previously hit 429 rate limits
-- Now uses:
-
-  - cache
-  - request delay
-  - product limit
-- Recently began returning some 403 responses
+- Uses shared helpers in `shopify_common.py`
+- Session warmup + browser-like headers reduce 403 rate limits
+- Default max products per card: 2
 
 ---
 
 # Silver Goblin
 
-Strategy:
+Strategy (JSON-first):
 
-1. Search page request
-2. Parse product URLs
-3. Visit product pages
-4. Parse embedded product JSON
-5. Parse variants for:
-
-   - condition
-   - price
-   - inventory
+1. Search via `/search/suggest.json` (HTML search fallback only if suggest is empty)
+2. Fetch `/products/{handle}.js` for each candidate product
+3. Parse variants for condition, price, inventory
+4. HTML product page fallback only for non-403 parse failures
 
 Notes:
 
-- Product JSON parsing works well
-- Correctly finds lowest NM variant
-- Recently began returning some 403 responses
+- Uses shared helpers in `shopify_common.py`
+- Default max products per card: 5
 
 ---
 
@@ -288,7 +278,10 @@ Features:
 - retry behavior
 - GET text helper
 - GET JSON helper
-- POST JSON helper
+- POST JSON helper (via shared Session)
+- per-host session warmup (homepage visit before first request)
+- browser navigation headers (`Referer`, `Sec-Fetch-*`)
+- optional cookies file import
 
 ## Cache
 
@@ -337,24 +330,34 @@ Other stores continue normally.
 
 ---
 
-# HTTP Headers
+# HTTP Headers and Session Behavior
 
-The project moved away from a clearly bot-like User-Agent.
-
-The shared HttpClient should use browser-like headers:
+The shared HttpClient uses browser-like headers:
 
 - User-Agent
 - Accept
 - Accept-Language
+- Sec-Fetch-* navigation headers
 
-We could try:
+Session behavior:
 
-- copy browser cookies
-- use proxies
-- bypass CAPTCHAs
-- attempt anti-bot evasion
+- cookies persist across requests within a run (do not clear between GETs)
+- first request to each store host warms up via homepage GET
+- optional `--cookies-file` loads Netscape-format cookies from a browser export
 
-Since if other implementations aren't working.
+---
+
+# Troubleshooting 403 / 429 Errors
+
+If Shopify stores start returning errors again:
+
+1. Increase delay: `--request-delay-seconds 15`
+2. Lower product cap: `--max-products-per-card 2`
+3. Export browser cookies and pass `--cookies-file path/to/cookies.txt`
+4. Use Playwright fallback for Shopify stores: `--use-browser` (requires `pip install mtg-price-checker[browser]` and `playwright install chromium`)
+5. Run `python scripts/debug_http_status.py` to compare cold vs warmed session behavior
+
+The circuit breaker disables a store for the remainder of a run after the first 403 or 429, so other stores continue normally.
 
 ---
 
@@ -368,6 +371,8 @@ Current CLI supports:
 - selected stores
 - request delay tuning
 - max products per card
+- `--cookies-file` for browser cookie import
+- `--use-browser` for Playwright-backed Danireon/Silver Goblin requests
 
 Example:
 
@@ -392,6 +397,7 @@ Important tests:
 - Face to Face batch preload tests
 - circuit breaker tests
 - quote selection tests
+- Shopify common helper tests
 
 Always run before commit:
 
@@ -445,24 +451,18 @@ Potential future milestones:
 
 # Known Current Situation
 
-Face to Face:
+All three stores are working with JSON-first strategies:
 
-- stable
-- fastest adapter
-- batch endpoint
+- **Face to Face**: stable, fastest adapter, single batch Deck Builder POST
+- **Danireon**: JSON suggest search + product `.js` parsing
+- **Silver Goblin**: JSON suggest search + product `.js` parsing
 
-Danireon / Silver Goblin:
+Reliability features in place:
 
-- functional historically
-- currently sometimes returning 403
-- likely sensitive to request headers and/or scraping patterns
-
-The project now includes:
-
-- browser-like headers
-- request throttling
-- 24h cache TTL
-- circuit breaker protections
+- browser-like headers and session warmup
+- request throttling and 24h cache TTL
+- store circuit breaker on 403/429
+- optional cookies file and Playwright fallback for Shopify stores
 
 ---
 

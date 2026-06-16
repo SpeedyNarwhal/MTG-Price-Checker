@@ -1,10 +1,11 @@
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -13,6 +14,13 @@ _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 )
+_NAVIGATION_HEADERS = {
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,15 @@ class HttpClientConfig:
     cache_dir: Path = Path(".cache/http")
     use_cache: bool = True
     cache_ttl_seconds: int = _SECONDS_IN_ONE_DAY
+    cookies_file: Path | None = None
+    warmup_hosts: bool = True
+    warmup_host_urls: tuple[str, ...] = field(
+        default_factory=lambda: (
+            "https://www.danireon.com/",
+            "https://silvergoblin.cards/",
+            "https://facetofacegames.com/",
+        )
+    )
 
 
 class HttpClient:
@@ -32,6 +49,7 @@ class HttpClient:
         self._config = config or HttpClientConfig()
         self._session = requests.Session()
         self._last_request_at = 0.0
+        self._warmed_hosts: set[str] = set()
 
         self._session.headers.update(
             {
@@ -41,9 +59,17 @@ class HttpClient:
             }
         )
 
+        self._load_cookies_file()
         self._delete_expired_cache_files()
 
-    def get_text(self, url: str, params: dict[str, str] | None = None) -> str:
+    def get_text(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        referer: str | None = None,
+        accept_json: bool = False,
+    ) -> str:
         cache_path = self._get_cache_path("GET", url, params=params)
 
         if self._config.use_cache and cache_path.exists():
@@ -52,7 +78,12 @@ class HttpClient:
 
             cache_path.unlink(missing_ok=True)
 
-        response_text = self._get_text_uncached(url, params)
+        response_text = self._get_text_uncached(
+            url,
+            params,
+            referer=referer,
+            accept_json=accept_json,
+        )
 
         if self._config.use_cache:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,8 +91,14 @@ class HttpClient:
 
         return response_text
 
-    def get_json(self, url: str, params: dict[str, str] | None = None) -> Any:
-        response_text = self.get_text(url, params=params)
+    def get_json(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        referer: str | None = None,
+    ) -> Any:
+        response_text = self.get_text(url, params=params, referer=referer, accept_json=True)
         return json.loads(response_text)
 
     def post_json(self, url: str, payload: dict[str, Any]) -> Any:
@@ -81,16 +118,29 @@ class HttpClient:
 
         return json.loads(response_text)
 
-    def _get_text_uncached(self, url: str, params: dict[str, str] | None = None) -> str:
+    def _get_text_uncached(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        referer: str | None = None,
+        accept_json: bool = False,
+    ) -> str:
         last_error: requests.HTTPError | None = None
 
         for attempt in range(self._config.max_retries + 1):
             self._wait_for_rate_limit()
-            self._session.cookies.clear()
+            self._warmup_host_if_needed(url)
+
+            headers = self._build_request_headers(
+                referer=referer,
+                accept_json=accept_json,
+            )
 
             response = self._session.get(
                 url,
                 params=params,
+                headers=headers,
                 timeout=self._config.timeout_seconds,
             )
 
@@ -115,13 +165,14 @@ class HttpClient:
 
     def _post_json_uncached(self, url: str, payload: dict[str, Any]) -> str:
         last_error: requests.HTTPError | None = None
-        headers = dict(self._session.headers)
-        headers["Accept"] = "application/json"
+        headers = self._build_request_headers(accept_json=True)
+        headers["Content-Type"] = "application/json"
 
         for attempt in range(self._config.max_retries + 1):
             self._wait_for_rate_limit()
+            self._warmup_host_if_needed(url)
 
-            response = requests.post(
+            response = self._session.post(
                 url,
                 json=payload,
                 headers=headers,
@@ -146,6 +197,62 @@ class HttpClient:
             raise last_error
 
         raise RuntimeError(f"Failed to fetch URL: {url}")
+
+    def _build_request_headers(
+        self,
+        *,
+        referer: str | None = None,
+        accept_json: bool = False,
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+
+        if accept_json:
+            headers["Accept"] = "application/json, text/plain, */*"
+            headers.update(_NAVIGATION_HEADERS)
+            headers["Sec-Fetch-Dest"] = "empty"
+            headers["Sec-Fetch-Mode"] = "cors"
+        else:
+            headers.update(_NAVIGATION_HEADERS)
+
+        if referer is not None:
+            headers["Referer"] = referer
+
+        return headers
+
+    def _warmup_host_if_needed(self, url: str) -> None:
+        if not self._config.warmup_hosts:
+            return
+
+        host = urlparse(url).netloc
+
+        if not host or host in self._warmed_hosts:
+            return
+
+        warmup_url = next(
+            (candidate for candidate in self._config.warmup_host_urls if host in candidate),
+            None,
+        )
+
+        if warmup_url is None:
+            self._warmed_hosts.add(host)
+            return
+
+        self._session.get(
+            warmup_url,
+            headers=self._build_request_headers(),
+            timeout=self._config.timeout_seconds,
+        )
+        self._warmed_hosts.add(host)
+
+    def _load_cookies_file(self) -> None:
+        cookies_file = self._config.cookies_file
+
+        if cookies_file is None or not cookies_file.exists():
+            return
+
+        cookie_jar = MozillaCookieJar(str(cookies_file))
+        cookie_jar.load(ignore_discard=True, ignore_expires=True)
+        self._session.cookies.update(cookie_jar)
 
     def _wait_for_rate_limit(self) -> None:
         elapsed = time.monotonic() - self._last_request_at

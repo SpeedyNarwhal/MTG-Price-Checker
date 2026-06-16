@@ -13,6 +13,9 @@ dev = [
     "pytest",
     "ruff",
 ]
+browser = [
+    "playwright>=1.40.0",
+]
 
 [project.scripts]
 mtg-prices = "mtg_price_checker.cli:main"

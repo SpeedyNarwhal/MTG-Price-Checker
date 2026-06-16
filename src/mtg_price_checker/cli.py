@@ -71,6 +71,22 @@ def main() -> None:
         help="Disable HTTP cache reads/writes for this run.",
     )
 
+    parser.add_argument(
+        "--cookies-file",
+        type=Path,
+        default=None,
+        help="Optional Netscape-format cookies file exported from a browser session.",
+    )
+
+    parser.add_argument(
+        "--use-browser",
+        action="store_true",
+        help=(
+            "Use Playwright for Danireon and Silver Goblin requests. "
+            "Install with: pip install mtg-price-checker[browser]"
+        ),
+    )
+
     args = parser.parse_args()
 
     requested_cards = parse_card_file(args.input_file)
@@ -80,6 +96,8 @@ def main() -> None:
         request_delay_seconds=args.request_delay_seconds,
         cache_ttl_seconds=int(args.cache_ttl_hours * 60 * 60),
         use_cache=not args.no_cache,
+        cookies_file=args.cookies_file,
+        use_browser=args.use_browser,
     )
 
     stores = build_stores(args.stores, options=store_options)
@@ -121,3 +139,7 @@ def _non_negative_float(value: str) -> float:
         raise argparse.ArgumentTypeError("Value must be zero or greater.")
 
     return parsed
+
+
+if __name__ == "__main__":
+    main()

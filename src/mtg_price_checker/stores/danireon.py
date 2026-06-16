@@ -1,7 +1,8 @@
 import re
 from decimal import Decimal
-from urllib.parse import urljoin
+from typing import Any
 
+import requests
 from bs4 import BeautifulSoup
 
 from mtg_price_checker.domain.enums import CardCondition, Finish
@@ -9,6 +10,11 @@ from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
 from mtg_price_checker.infra.http_client import HttpClient
 from mtg_price_checker.stores.base import StoreAdapter
+from mtg_price_checker.stores.shopify_common import (
+    parse_shopify_condition_variants,
+    search_product_urls,
+    to_shopify_product_json_url,
+)
 
 _DANIREON_BASE_URL = "https://www.danireon.com"
 
@@ -52,29 +58,78 @@ class DanireonStoreAdapter(StoreAdapter):
         return "Danireon"
 
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
-        search_html = self._http_client.get_text(
-            f"{_DANIREON_BASE_URL}/search",
-            params={
-                "q": requested_card.normalized_name,
-                "type": "product",
-            },
+        product_urls = search_product_urls(
+            self._http_client,
+            _DANIREON_BASE_URL,
+            requested_card.normalized_name,
+            self._max_products_to_check,
         )
-
-        product_urls = _extract_product_urls(search_html)
 
         quotes: list[StoreQuote] = []
 
         for product_url in product_urls[: self._max_products_to_check]:
-            product_html = self._http_client.get_text(product_url)
             quotes.extend(
-                parse_danireon_product_page(
-                    html=product_html,
+                self._fetch_product_quotes(
                     product_url=product_url,
                     requested_card=requested_card,
                 )
             )
 
         return quotes
+
+    def _fetch_product_quotes(
+        self,
+        product_url: str,
+        requested_card: RequestedCard,
+    ) -> list[StoreQuote]:
+        product_json_url = to_shopify_product_json_url(product_url, _DANIREON_BASE_URL)
+
+        try:
+            product_json = self._http_client.get_json(
+                product_json_url,
+                referer=f"{_DANIREON_BASE_URL}/",
+            )
+            json_quotes = parse_danireon_product_json(
+                product_json=product_json,
+                product_url=product_url,
+                requested_card=requested_card,
+            )
+
+            if json_quotes:
+                return json_quotes
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code in {403, 429}:
+                raise
+        except Exception:
+            pass
+
+        product_html = self._http_client.get_text(
+            product_url,
+            referer=f"{_DANIREON_BASE_URL}/",
+        )
+
+        return parse_danireon_product_page(
+            html=product_html,
+            product_url=product_url,
+            requested_card=requested_card,
+        )
+
+
+def parse_danireon_product_json(
+    product_json: dict[str, Any],
+    product_url: str,
+    requested_card: RequestedCard,
+) -> list[StoreQuote]:
+    return parse_shopify_condition_variants(
+        product_json,
+        product_url,
+        requested_card,
+        store_id="danireon",
+        extract_card_name_from_title=_extract_card_name_from_title,
+        extract_collector_number=_extract_collector_number_from_title,
+        extract_set_code=_extract_set_code_from_title,
+        default_finish_from_title=_extract_finish,
+    )
 
 
 def parse_danireon_product_page(
@@ -138,31 +193,6 @@ def parse_danireon_product_page(
     return quotes
 
 
-def _extract_product_urls(html: str) -> list[str]:
-    soup = BeautifulSoup(html, "html.parser")
-    urls: list[str] = []
-
-    for link in soup.find_all("a", href=True):
-        href_value = link.get("href")
-
-        if not isinstance(href_value, str):
-            continue
-
-        if not _looks_like_danireon_product_url(href_value):
-            continue
-
-        absolute_url = urljoin(_DANIREON_BASE_URL, href_value).split("?")[0]
-
-        if absolute_url not in urls:
-            urls.append(absolute_url)
-
-    return urls
-
-
-def _looks_like_danireon_product_url(href: str) -> bool:
-    return "/products/" in href
-
-
 def _extract_title(soup: BeautifulSoup) -> str | None:
     for selector in ["h1", "h2"]:
         heading = soup.find(selector)
@@ -189,6 +219,16 @@ def _extract_title(soup: BeautifulSoup) -> str | None:
 def _extract_card_name_from_title(title: str) -> str:
     before_set_info = title.split("(", maxsplit=1)[0]
     return before_set_info.strip()
+
+
+def _extract_collector_number_from_title(title: str) -> str | None:
+    _, collector_number = _extract_set_and_collector_number(title)
+    return collector_number
+
+
+def _extract_set_code_from_title(title: str) -> str | None:
+    set_code, _ = _extract_set_and_collector_number(title)
+    return set_code
 
 
 def _card_names_match(requested_name: str, matched_name: str) -> bool:
