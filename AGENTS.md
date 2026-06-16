@@ -1,399 +1,399 @@
-# AGENTS.md — MTG Price Checker Project Context
+# AGENTS.md
 
-## Project summary
+## Project Overview
 
-This is a Python terminal-based Magic: The Gathering price checker.
+MTG Price Checker is a terminal-based Python application that compares Magic: The Gathering card prices across multiple Canadian game stores.
 
-The program takes a text file containing MTG card names, optionally with quantities, and outputs a CSV where:
+Input:
 
-- Rows are requested cards.
-- Columns are supported stores.
-- Each cell is either:
-  - the lowest in-stock Near Mint price for that card at that store, or
-  - a status such as `OUT_OF_STOCK`, `NOT_FOUND`, or `ERROR`.
+- A text file containing card names (one per line)
 
-A pretty UI may be added later, but the current goal is a clean CLI program.
+Output:
 
-## Supported / planned stores
+- A CSV matrix:
 
-Current adapter status:
+  - rows = cards
+  - columns = stores
+  - cell = lowest Near Mint in-stock CAD price OR status indicator
 
-- `danireon`: working.
-- `silvergoblin`: working.
-- `facetoface`: in progress.
-- `imaginaire`: planned later.
+A second audit CSV provides debugging and traceability details:
 
-Initial target stores:
+- status
+- chosen product URL
+- notes/errors
 
-- https://facetofacegames.com/
-- https://imaginaire.com/
-- https://silvergoblin.cards/
-- https://www.danireon.com/
+The project is intentionally modular so new stores can be added independently.
 
-## Core design principles
+---
 
-Keep the project modular.
+# Current Supported Stores
 
-Each store must have its own adapter because each store website works differently.
+Implemented:
 
-The shared code should not know how each store website works. The shared code should only deal with normalized `StoreQuote` objects.
+- Danireon
+- Silver Goblin
+- Face to Face Games
 
-The architecture should stay roughly:
+Planned:
 
-```text
-input card list
-→ parse RequestedCard objects
-→ store adapters return StoreQuote objects
-→ shared price checker chooses lowest NM in-stock quote
-→ CSV writer outputs matrix + optional audit CSV
-```
+- Imaginaire
 
-Do not put store-specific scraping/parsing logic in the shared price checker.
+---
 
-Do not duplicate lowest-price business logic inside store adapters.
-
-## Important business rules
-
-The final price for a card/store should be:
-
-1. Only Near Mint condition.
-2. Only in-stock listings.
-3. Cheapest matching listing.
-4. If no NM in-stock listing exists but listings were found, return `OUT_OF_STOCK`.
-5. If no matching product/listing was found, return `NOT_FOUND`.
-6. If the request/parsing fails, return `ERROR`.
-
-Use these statuses:
-
-- `FOUND`
-- `OUT_OF_STOCK`
-- `NOT_FOUND`
-- `AMBIGUOUS`
-- `ERROR`
-
-Do not collapse errors into `OUT_OF_STOCK`.
-
-## Existing source layout
-
-Expected structure:
+# High-Level Architecture
 
 ```text
 src/mtg_price_checker/
-  cli.py
-
-  domain/
-    enums.py
-    requested_card.py
-    store_quote.py
-    price_result.py
-
-  input/
-    card_normalizer.py
-    decklist_parser.py
-
-  output/
-    csv_writer.py
-
-  services/
-    price_checker.py
-    store_registry.py
-
-  stores/
-    base.py
-    fake.py
-    danireon.py
-    silvergoblin.py
-    facetoface.py
-
-  infra/
-    http_client.py
+├── cli.py
+├── models/
+├── stores/
+├── services/
+├── infra/
+├── input/
+├── output/
+└── tests/
 ```
 
-Tests live in:
+## Important Modules
 
-```text
-tests/unit/
-```
+### `stores/`
 
-## CLI behavior
+Contains one adapter per store.
 
-The CLI command is:
+Each store has completely custom parsing logic because every website behaves differently.
 
-```powershell
-mtg-prices cards.txt --stores danireon silvergoblin facetoface --output output/prices.csv --audit output/audit.csv
-```
+Current adapters:
 
-Useful tuning options should exist or be preserved:
+- `danireon.py`
+- `silvergoblin.py`
+- `facetoface.py`
 
-```powershell
---max-products-per-card
---request-delay-seconds
---cache-ttl-hours
---no-cache
-```
+### `services/price_checker.py`
 
-Typical safe command:
+Shared orchestration logic:
 
-```powershell
-mtg-prices cards.txt --stores danireon silvergoblin --output output/prices.csv --audit output/audit.csv
-```
+- loops through stores/cards
+- selects lowest valid quote
+- handles statuses
+- now contains store circuit-breaker logic
 
-Deeper but slower search:
+### `infra/http_client.py`
 
-```powershell
-mtg-prices cards.txt --stores danireon silvergoblin --max-products-per-card 10 --request-delay-seconds 8 --output output/prices.csv --audit output/audit.csv
-```
+Shared HTTP infrastructure:
 
-Fresh run ignoring cache:
+- request delay
+- caching
+- cache TTL
+- JSON/text helpers
+- POST JSON support
 
-```powershell
-mtg-prices cards.txt --stores danireon silvergoblin --no-cache --request-delay-seconds 10 --output output/fresh-prices.csv --audit output/fresh-audit.csv
-```
+### `models/`
 
-## Caching and rate limiting
+Shared domain models:
 
-The project has an HTTP client in `infra/http_client.py`.
+- `RequestedCard`
+- `StoreQuote`
+- `PriceResult`
+- enums for:
 
-Important behavior:
+  - condition
+  - finish
+  - result status
 
-- Use a shared `HttpClient` instance when building multiple real store adapters.
-- Respect `request_delay_seconds`.
-- Cache successful responses under `.cache/http`.
-- Cache TTL should default to 24 hours because store inventory changes daily.
-- Do not cache forever.
-- `.cache/` must be ignored by Git.
-- `/output/` must be ignored by Git, but `src/mtg_price_checker/output/` must be tracked.
+---
 
-Correct `.gitignore` style:
+# Core Business Rules
 
-```gitignore
-/output/
-.cache/
-.venv/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-*.pyc
-dist/
-build/
-*.egg-info/
-.env
-```
+## Valid Quote Selection
 
-Do not use `output/` without the leading slash, because that can accidentally ignore `src/mtg_price_checker/output/`.
+The app only considers:
 
-## Scraping / request safety
+- Near Mint (`NM`)
+- in-stock
+- CAD prices
 
-Be conservative.
+The final selected result per store/card is:
 
-Do not make many rapid requests to store websites.
+- lowest valid NM in-stock price
 
-Avoid retry storms.
+## Status Semantics
 
-If a store returns HTTP 429, do not immediately hit fallback URLs that double the request count.
+### `FOUND`
 
-For example, in a store adapter, if a `.js` or JSON request gets HTTP 429, re-raise the error instead of falling back to HTML and making another request.
+At least one valid NM in-stock quote exists.
 
-Default request delay should be around 8 seconds for live multi-store runs.
+### `OUT_OF_STOCK`
 
-## Current known store details
+Card exists at the store but no valid NM in-stock quote exists.
 
-### Danireon
+### `NOT_FOUND`
 
-Danireon adapter is working.
+No matching product/card found.
+
+### `ERROR`
+
+HTTP errors, parsing failures, unexpected response shapes, etc.
+
+---
+
+# Current Store Implementations
+
+# Danireon
 
 Strategy:
 
-```text
-/search?q=<card>&type=product
-→ extract product URLs
-→ open product pages
-→ parse condition text such as:
-   Near Mint - $1.68 CAD
-   Near Mint - Sold out
-   Near Mint - $2.23 CAD - sold out!
-```
+1. Search page request:
+   `/search?q=...&type=product`
+2. Parse product URLs from HTML
+3. Visit product pages
+4. Parse condition/price/inventory
 
-Important details:
+Notes:
 
-- Product URLs may be `/products/...`, `/collections/all/products/...`, or `/collections/mtg-singles/products/...`.
-- Do not restrict only to `/collections/mtg-singles/products/`.
-- Parser should allow sold-out NM listings with `price_cad = None` if no price is shown.
-- Final shared price checker decides `OUT_OF_STOCK`.
+- Uses Shopify-style product pages
+- Previously hit 429 rate limits
+- Now uses:
 
-### Silver Goblin
+  - cache
+  - request delay
+  - product limit
+- Recently began returning some 403 responses
 
-Silver Goblin adapter is working.
+---
+
+# Silver Goblin
 
 Strategy:
 
-```text
-/search?q=<card>&type=product
-→ extract product URLs
-→ try Shopify product .js JSON
-→ parse variants
-→ fallback to HTML only if appropriate
-```
+1. Search page request
+2. Parse product URLs
+3. Visit product pages
+4. Parse embedded product JSON
+5. Parse variants for:
 
-Important details:
+   - condition
+   - price
+   - inventory
 
-- Some products have condition-labelled variants like `Near Mint`.
-- Some products use a default variant such as `Default Title`; for those, treat the product as NM with lower confidence if it matches the requested card.
-- Search result order is not necessarily cheapest.
-- `max_products_per_card` matters. For Sol Ring, too small a candidate count may miss the true cheapest NM copy.
-- Normal default can be 5; deep mode can use 10+.
+Notes:
 
-### Face to Face
+- Product JSON parsing works well
+- Correctly finds lowest NM variant
+- Recently began returning some 403 responses
 
-Face to Face adapter is currently in progress.
+---
 
-Important current finding:
+# Face to Face Games
 
-- `/search?q=Arcane Signet&type=product` returned irrelevant raw HTML product links like:
-  - gift card
-  - booster packs
-  - Lorcana
-  - Pokémon
-- So normal `/search` HTML is not reliable for card discovery.
+IMPORTANT:
+Face to Face no longer uses HTML search scraping.
 
-Current intended strategy:
+It now uses the Deck Builder JSON endpoint.
+
+## Endpoint
 
 ```text
-/search/suggest.json?q=<card>&resources[type]=product&resources[limit]=20
-→ extract product URLs from JSON
-→ open product pages
-→ parse NM count and regular price
+POST https://facetofacegames.com/apps/prod-indexer/deckBuilder/search
 ```
 
-Fallback to `/search` HTML only if suggest JSON gives no usable result.
+## Payload Shape
 
-Face to Face product pages expose useful text such as:
-
-```text
-Set: Commander 2020
-Type Line: Artifact
-Finish: Non-Foil
-Collector #: 237
-NM (6)
-Regular price $1.49
+```json
+{
+  "sort": false,
+  "filters": [
+    {
+      "field": "Card Name",
+      "values": ["Sol Ring", "Arcane Signet"]
+    },
+    {
+      "field": "in_stock",
+      "values": ["1"]
+    }
+  ]
+}
 ```
 
-Parser should extract:
+## Response Shape
 
-- card name
-- set name
-- collector number
-- finish
-- condition
-- quantity
-- regular price
+Useful data is under:
 
-Face to Face title strings may look like:
-
-```text
-Arcane Signet [237] [Commander 2020] [Non-Foil]
+```json
+{
+  "Cards": {
+    "Sol Ring": [...],
+    "Arcane Signet": [...]
+  }
+}
 ```
 
-Strip bracket suffixes so matched card name becomes:
+Each product entry contains:
 
-```text
-Arcane Signet
+- `_source.handle`
+- `_source.General_Card_Name`
+- `_source.MTG_Set_Name`
+- `_source.MTG_Collector_Number`
+- `_source.MTG_Foil_Option`
+- `_source.variants`
+
+Each variant contains:
+
+- `price`
+- `inventoryQuantity`
+- `selectedOptions`
+
+Condition is found in:
+
+- `selectedOptions`
+- option name `"Condition"`
+
+## Batch Preload Architecture
+
+Face to Face supports batch loading.
+
+It should:
+
+- make ONE POST request for the full card list
+- preload all results
+- store quotes internally
+
+`search_card()` should:
+
+- read from preloaded data
+- not make one POST per card during normal runs
+
+This is implemented via:
+
+- optional preload/batch adapter behavior
+- preload call before card/store loops
+
+This dramatically improves:
+
+- speed
+- request count
+- reliability
+
+---
+
+# HTTP Infrastructure
+
+## Shared HttpClient Features
+
+The app uses a shared HTTP client.
+
+Features:
+
+- request delay
+- caching
+- retry behavior
+- GET text helper
+- GET JSON helper
+- POST JSON helper
+
+## Cache
+
+Cache entries currently expire after:
+
+- 24 hours
+
+Reason:
+Store inventory updates daily.
+
+## Request Delay
+
+The app intentionally spaces requests to avoid hammering stores.
+
+CLI tuning options exist for:
+
+- request delay
+- max products per card
+
+---
+
+# Important Reliability Features
+
+# Store Circuit Breaker
+
+The app now disables stores during a run after:
+
+- HTTP 403
+- HTTP 429
+
+Reason:
+Avoid repeatedly hammering a blocked/rate-limited store.
+
+Behavior:
+
+- first 403/429:
+
+  - current request becomes ERROR
+  - store disabled for remainder of run
+- subsequent cards:
+
+  - store is skipped
+  - ERROR returned immediately
+
+Other stores continue normally.
+
+---
+
+# HTTP Headers
+
+The project moved away from a clearly bot-like User-Agent.
+
+The shared HttpClient should use browser-like headers:
+
+- User-Agent
+- Accept
+- Accept-Language
+
+We could try:
+
+- copy browser cookies
+- use proxies
+- bypass CAPTCHAs
+- attempt anti-bot evasion
+
+Since if other implementations aren't working.
+
+---
+
+# CLI Features
+
+Current CLI supports:
+
+- input file
+- output CSV
+- audit CSV
+- selected stores
+- request delay tuning
+- max products per card
+
+Example:
+
+```powershell
+mtg-prices cards.txt `
+  --stores danireon silvergoblin facetoface `
+  --request-delay-seconds 8 `
+  --max-products-per-card 5 `
+  --output output/prices.csv `
+  --audit output/audit.csv
 ```
 
-Important parser regex note:
+---
 
-Use a condition regex that can match across newlines. This works:
+# Testing
 
-```python
-_CONDITION_PATTERN = re.compile(
-    r"(?P<label>NM|PL|MP|HP|DMG)\s*"
-    r"\((?P<quantity>\d+)\)"
-    r"[\s\S]{0,300}?"
-    r"Regular price\s+\$(?P<price>\d+(?:\.\d{2})?)",
-    re.IGNORECASE,
-)
-```
+The project uses pytest.
 
-Do not use `.{0,300}?` unless `re.DOTALL` is enabled, because test fixtures and real HTML may contain newlines between `NM (6)` and `Regular price`.
+Important tests:
 
-Likewise, this set regex is safer:
+- parser tests per store
+- Face to Face batch preload tests
+- circuit breaker tests
+- quote selection tests
 
-```python
-_SET_PATTERN = re.compile(r"Set:\s*(?P<set_name>[\s\S]+?)\s+Type Line:", re.IGNORECASE)
-```
-
-## Important types
-
-`StoreQuote.price_cad` should be:
-
-```python
-Decimal | None
-```
-
-because sold-out listings may have no visible price.
-
-When choosing the cheapest quote, avoid Pylance issues with `Decimal | None`.
-
-Use a helper like:
-
-```python
-def _required_price(quote: StoreQuote) -> Decimal:
-    if quote.price_cad is None:
-        raise ValueError("Expected quote to have a price.")
-    return quote.price_cad
-```
-
-Then:
-
-```python
-return min(valid_quotes, key=_required_price)
-```
-
-Do not use:
-
-```python
-return min(valid_quotes, key=lambda quote: quote.price_cad)
-```
-
-because Pylance may complain that the key can be `Decimal | None`.
-
-## BeautifulSoup typing notes
-
-BeautifulSoup attribute values can have broad types.
-
-When reading `href`, use:
-
-```python
-href_value = link.get("href")
-
-if not isinstance(href_value, str):
-    continue
-```
-
-Do not pass raw BeautifulSoup attribute values directly to `urljoin`, or Pylance may complain.
-
-## Input file encoding notes
-
-PowerShell can create UTF-16 or BOM-containing text files depending on command/version.
-
-The parser should handle:
-
-- `utf-8-sig`
-- `utf-8`
-- `utf-16`
-
-The normalizer should strip invisible characters such as:
-
-```python
-"\ufeff"  # BOM
-"\u200b"  # zero-width space
-```
-
-This prevents searching for `﻿Sol Ring` instead of `Sol Ring`.
-
-## Testing commands
-
-Before committing, always run:
+Always run before commit:
 
 ```powershell
 ruff format .
@@ -401,20 +401,92 @@ ruff check . --fix
 pytest
 ```
 
-Useful live smoke tests:
+---
+
+# Development Guidelines
+
+## Design Philosophy
+
+Keep:
+
+- store-specific parsing isolated
+- shared business logic centralized
+- HTTP infrastructure reusable
+- adapters modular
+
+## When Adding New Stores
+
+Preferred order of strategies:
+
+1. Official/public JSON endpoint
+2. Search endpoint returning structured JSON
+3. Embedded product JSON
+4. HTML scraping
+5. If nothing else works:
+- browser automation
+- Playwright/Selenium unless absolutely necessary
+- copying cookies
+- anti-bot bypass techniques
+
+## Desired Future Improvements
+
+Potential future milestones:
+
+- Imaginaire adapter
+- async request pipeline
+- better fuzzy card matching
+- Scryfall metadata integration
+- pretty UI/web frontend
+- deck import formats
+- price history
+- buy optimization across stores
+
+---
+
+# Known Current Situation
+
+Face to Face:
+
+- stable
+- fastest adapter
+- batch endpoint
+
+Danireon / Silver Goblin:
+
+- functional historically
+- currently sometimes returning 403
+- likely sensitive to request headers and/or scraping patterns
+
+The project now includes:
+
+- browser-like headers
+- request throttling
+- 24h cache TTL
+- circuit breaker protections
+
+---
+
+# Manual Smoke Tests
+
+## Face to Face
 
 ```powershell
-Set-Content -Path one-card.txt -Value "Sol Ring" -Encoding utf8
+Set-Content -Path f2f-test.txt -Value @(
+  "Sol Ring",
+  "Arcane Signet",
+  "Counterspell"
+) -Encoding utf8
 
-mtg-prices one-card.txt --stores danireon --output output/danireon-one-card.csv --audit output/danireon-one-card-audit.csv
-
-mtg-prices one-card.txt --stores silvergoblin --max-products-per-card 10 --output output/sg-one-card.csv --audit output/sg-one-card-audit.csv
+mtg-prices f2f-test.txt `
+  --stores facetoface `
+  --output output/f2f-prices.csv `
+  --audit output/f2f-audit.csv
 ```
 
-Two-store test:
+## Multi-store
 
 ```powershell
-Set-Content -Path two-store-test.txt -Value @(
+Set-Content -Path three-store-test.txt -Value @(
   "Sol Ring",
   "Arcane Signet",
   "Counterspell",
@@ -422,74 +494,10 @@ Set-Content -Path two-store-test.txt -Value @(
   "Blood Crypt"
 ) -Encoding utf8
 
-mtg-prices two-store-test.txt --stores danireon silvergoblin --output output/two-store-prices.csv --audit output/two-store-audit.csv
+mtg-prices three-store-test.txt `
+  --stores danireon silvergoblin facetoface `
+  --request-delay-seconds 8 `
+  --max-products-per-card 5 `
+  --output output/three-store-prices.csv `
+  --audit output/three-store-audit.csv
 ```
-
-Face to Face test:
-
-```powershell
-Set-Content -Path one-card.txt -Value "Arcane Signet" -Encoding utf8
-
-mtg-prices one-card.txt --stores facetoface --max-products-per-card 10 --output output/f2f-one-card.csv --audit output/f2f-one-card-audit.csv
-```
-
-## Git workflow
-
-Use feature branches:
-
-```powershell
-git checkout main
-git pull
-git checkout -b milestone-name
-```
-
-Commit once tests pass:
-
-```powershell
-git status
-git add .
-git commit -m "Clear descriptive message"
-git push --set-upstream origin branch-name
-```
-
-Merge when stable:
-
-```powershell
-git checkout main
-git pull
-git merge branch-name
-git push
-```
-
-## Current development plan
-
-Immediate next steps:
-
-1. Finish/debug Face to Face adapter.
-2. Confirm Face to Face can find Arcane Signet through suggest JSON.
-3. Confirm parser returns NM in-stock price.
-4. Test Face to Face on:
-   - Sol Ring
-   - Arcane Signet
-   - Counterspell
-   - Command Tower
-   - Blood Crypt
-5. Test all three stores together.
-6. Commit milestone 4.
-7. After Face to Face, investigate Imaginaire.
-
-Do not start Imaginaire until Face to Face is stable.
-
-## General guidance for future Codex work
-
-When making changes:
-
-- Keep changes small.
-- Preserve existing public behavior unless explicitly changing it.
-- Add or update tests for parser changes.
-- Prefer parser fixture tests before live tests.
-- Do not remove rate limiting or cache TTL.
-- Do not hardcode one-off product URLs as the normal strategy.
-- Do not make the app browser-automation-based unless all simpler HTTP/JSON options fail.
-- If live store behavior differs from tests, update tests to reflect the real HTML/JSON shape.
-- Keep audit CSV useful because it is the main debugging tool for store adapters.

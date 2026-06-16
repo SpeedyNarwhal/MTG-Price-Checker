@@ -1,12 +1,83 @@
 from decimal import Decimal
 
+import pytest
+import requests
+
 from mtg_price_checker.domain.enums import CardCondition, Finish, ResultStatus
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
 from mtg_price_checker.services.price_checker import (
     build_price_result,
+    check_prices,
     choose_lowest_nm_in_stock_quote,
 )
+from mtg_price_checker.stores.base import StoreAdapter
+
+
+class BatchTestStore(StoreAdapter):
+    def __init__(self) -> None:
+        self.preloaded_cards: list[RequestedCard] = []
+        self.search_calls: list[RequestedCard] = []
+
+    @property
+    def store_id(self) -> str:
+        return "batchtest"
+
+    @property
+    def display_name(self) -> str:
+        return "Batch Test"
+
+    def preload_cards(self, requested_cards: list[RequestedCard]) -> None:
+        self.preloaded_cards = requested_cards
+
+    def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
+        self.search_calls.append(requested_card)
+        return []
+
+
+class FailingHttpStore(StoreAdapter):
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.call_count = 0
+
+    @property
+    def store_id(self) -> str:
+        return "failing"
+
+    @property
+    def display_name(self) -> str:
+        return "Failing"
+
+    def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
+        self.call_count += 1
+        raise _http_error(self.status_code)
+
+
+class SuccessfulStore(StoreAdapter):
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    @property
+    def store_id(self) -> str:
+        return "successful"
+
+    @property
+    def display_name(self) -> str:
+        return "Successful"
+
+    def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
+        self.call_count += 1
+        return [
+            StoreQuote(
+                store_id=self.store_id,
+                requested_card_name=requested_card.normalized_name,
+                matched_card_name=requested_card.normalized_name,
+                condition=CardCondition.NEAR_MINT,
+                finish=Finish.NONFOIL,
+                price_cad=Decimal("1.00"),
+                in_stock=True,
+            )
+        ]
 
 
 def test_choose_lowest_nm_in_stock_quote() -> None:
@@ -95,3 +166,64 @@ def test_build_price_result_returns_found_for_nm_in_stock() -> None:
 
     assert result.status == ResultStatus.FOUND
     assert result.lowest_nm_price_cad == Decimal("1.50")
+
+
+def test_check_prices_preloads_batch_store_before_per_card_search() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    store = BatchTestStore()
+
+    check_prices(requested_cards, [store])
+
+    assert store.preloaded_cards == requested_cards
+    assert store.search_calls == requested_cards
+
+
+@pytest.mark.parametrize("status_code", [403, 429])
+def test_check_prices_disables_store_after_http_403_or_429(status_code: int) -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    store = FailingHttpStore(status_code)
+
+    results = check_prices(requested_cards, [store])
+
+    first_result = results["Sol Ring"]["failing"]
+    second_result = results["Arcane Signet"]["failing"]
+
+    assert store.call_count == 1
+    assert first_result.status == ResultStatus.ERROR
+    assert f"{status_code} Client Error" in (first_result.notes or "")
+    assert second_result.status == ResultStatus.ERROR
+    assert second_result.notes == f"Store disabled for this run after HTTP {status_code}."
+
+
+def test_check_prices_disabled_store_does_not_stop_other_stores() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    failing_store = FailingHttpStore(403)
+    successful_store = SuccessfulStore()
+
+    results = check_prices(requested_cards, [failing_store, successful_store])
+
+    assert failing_store.call_count == 1
+    assert successful_store.call_count == 2
+    assert results["Sol Ring"]["failing"].status == ResultStatus.ERROR
+    assert (
+        results["Arcane Signet"]["failing"].notes == "Store disabled for this run after HTTP 403."
+    )
+    assert results["Sol Ring"]["successful"].status == ResultStatus.FOUND
+    assert results["Arcane Signet"]["successful"].status == ResultStatus.FOUND
+
+
+def _http_error(status_code: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status_code
+    response.url = "https://example.test/search"
+
+    return requests.HTTPError(f"{status_code} Client Error: Forbidden for url", response=response)

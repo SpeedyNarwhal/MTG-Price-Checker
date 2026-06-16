@@ -13,13 +13,19 @@ from mtg_price_checker.infra.http_client import HttpClient
 from mtg_price_checker.stores.base import StoreAdapter
 
 _FACE_TO_FACE_BASE_URL = "https://facetofacegames.com"
+_DECK_BUILDER_SEARCH_URL = f"{_FACE_TO_FACE_BASE_URL}/apps/prod-indexer/deckBuilder/search"
 
 _CONDITION_LABELS = {
     "NM": CardCondition.NEAR_MINT,
+    "NEAR MINT": CardCondition.NEAR_MINT,
     "PL": CardCondition.LIGHTLY_PLAYED,
+    "LIGHTLY PLAYED": CardCondition.LIGHTLY_PLAYED,
     "MP": CardCondition.MODERATELY_PLAYED,
+    "MODERATELY PLAYED": CardCondition.MODERATELY_PLAYED,
     "HP": CardCondition.HEAVILY_PLAYED,
+    "HEAVILY PLAYED": CardCondition.HEAVILY_PLAYED,
     "DMG": CardCondition.DAMAGED,
+    "DAMAGED": CardCondition.DAMAGED,
 }
 
 _CONDITION_PATTERN = re.compile(
@@ -43,6 +49,8 @@ class FaceToFaceStoreAdapter(StoreAdapter):
     ) -> None:
         self._http_client = http_client or HttpClient()
         self._max_products_to_check = max_products_to_check
+        self._quotes_by_card_name: dict[str, list[StoreQuote]] = {}
+        self._preloaded_card_names: set[str] = set()
 
     @property
     def store_id(self) -> str:
@@ -52,8 +60,53 @@ class FaceToFaceStoreAdapter(StoreAdapter):
     def display_name(self) -> str:
         return "Face to Face"
 
+    def preload_cards(self, requested_cards: list[RequestedCard]) -> None:
+        unique_cards_by_key = {
+            _card_cache_key(requested_card): requested_card for requested_card in requested_cards
+        }
+
+        if not unique_cards_by_key:
+            return
+
+        deck_builder_response = self._http_client.post_json(
+            _DECK_BUILDER_SEARCH_URL,
+            _build_deck_builder_payload(
+                [card.normalized_name for card in unique_cards_by_key.values()]
+            ),
+        )
+
+        cards = _safe_dict(deck_builder_response, "Cards")
+
+        for normalized_key, requested_card in unique_cards_by_key.items():
+            self._quotes_by_card_name[normalized_key] = (
+                parse_face_to_face_deck_builder_cards(
+                    cards=cards,
+                    requested_card=requested_card,
+                    max_products_to_check=self._max_products_to_check,
+                )
+                if cards is not None
+                else []
+            )
+            self._preloaded_card_names.add(normalized_key)
+
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
-        product_urls = self._search_product_urls(requested_card)
+        normalized_key = _card_cache_key(requested_card)
+
+        if normalized_key in self._preloaded_card_names:
+            return self._quotes_by_card_name.get(normalized_key, [])
+
+        try:
+            self.preload_cards([requested_card])
+            return self._quotes_by_card_name.get(normalized_key, [])
+
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                raise
+
+        except Exception:
+            pass
+
+        product_urls = self._search_product_urls_from_pages(requested_card)
         quotes: list[StoreQuote] = []
 
         for product_url in product_urls[: self._max_products_to_check]:
@@ -68,29 +121,7 @@ class FaceToFaceStoreAdapter(StoreAdapter):
 
         return quotes
 
-    def _search_product_urls(self, requested_card: RequestedCard) -> list[str]:
-        try:
-            suggest_json = self._http_client.get_json(
-                f"{_FACE_TO_FACE_BASE_URL}/search/suggest.json",
-                params={
-                    "q": requested_card.normalized_name,
-                    "resources[type]": "product",
-                    "resources[limit]": "20",
-                },
-            )
-
-            product_urls = _extract_product_urls_from_suggest_json(suggest_json)
-
-            if product_urls:
-                return product_urls
-
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 429:
-                raise
-
-        except Exception:
-            pass
-
+    def _search_product_urls_from_pages(self, requested_card: RequestedCard) -> list[str]:
         search_html = self._http_client.get_text(
             f"{_FACE_TO_FACE_BASE_URL}/search",
             params={
@@ -100,6 +131,94 @@ class FaceToFaceStoreAdapter(StoreAdapter):
         )
 
         return _extract_product_urls(search_html)
+
+
+def parse_face_to_face_deck_builder_response(
+    payload: Any,
+    requested_card: RequestedCard,
+    max_products_to_check: int | None = None,
+) -> list[StoreQuote]:
+    cards = _safe_dict(payload, "Cards")
+
+    return parse_face_to_face_deck_builder_cards(
+        cards=cards,
+        requested_card=requested_card,
+        max_products_to_check=max_products_to_check,
+    )
+
+
+def parse_face_to_face_deck_builder_cards(
+    cards: dict[Any, Any] | None,
+    requested_card: RequestedCard,
+    max_products_to_check: int | None = None,
+) -> list[StoreQuote]:
+    if cards is None:
+        return []
+
+    products = _find_card_products(cards, requested_card.normalized_name)
+
+    if max_products_to_check is not None:
+        products = products[:max_products_to_check]
+
+    quotes: list[StoreQuote] = []
+
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+
+        source = _safe_dict(product, "_source")
+
+        if source is None:
+            continue
+
+        card_name = _safe_string(source.get("General_Card_Name"))
+
+        if card_name is None:
+            continue
+
+        if not _card_names_match(requested_card.normalized_name, card_name):
+            continue
+
+        handle = _safe_string(source.get("handle"))
+        product_url = f"{_FACE_TO_FACE_BASE_URL}/products/{handle}" if handle else None
+        set_name = _safe_string(source.get("MTG_Set_Name"))
+        collector_number = _safe_string(source.get("MTG_Collector_Number"))
+        finish = _finish_from_text(_safe_string(source.get("MTG_Foil_Option")) or "")
+        variants = source.get("variants")
+
+        if not isinstance(variants, list):
+            continue
+
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+
+            condition = _extract_variant_condition(variant)
+            price = _extract_variant_price(variant)
+            quantity_available = _extract_variant_quantity(variant)
+
+            if condition is None:
+                continue
+
+            quotes.append(
+                StoreQuote(
+                    store_id="facetoface",
+                    requested_card_name=requested_card.normalized_name,
+                    matched_card_name=card_name,
+                    condition=condition,
+                    finish=finish,
+                    price_cad=price,
+                    in_stock=quantity_available > 0 and price is not None,
+                    product_url=product_url,
+                    quantity_available=quantity_available,
+                    set_name=set_name,
+                    collector_number=collector_number,
+                    raw_title=card_name,
+                    confidence_score=1.0,
+                )
+            )
+
+    return quotes
 
 
 def parse_face_to_face_product_page(
@@ -159,47 +278,6 @@ def parse_face_to_face_product_page(
         )
 
     return quotes
-
-
-def _extract_product_urls_from_suggest_json(payload: Any) -> list[str]:
-    urls: list[str] = []
-
-    if not isinstance(payload, dict):
-        return urls
-
-    resources = payload.get("resources")
-
-    if not isinstance(resources, dict):
-        return urls
-
-    results = resources.get("results")
-
-    if not isinstance(results, dict):
-        return urls
-
-    products = results.get("products")
-
-    if not isinstance(products, list):
-        return urls
-
-    for product in products:
-        if not isinstance(product, dict):
-            continue
-
-        raw_url = product.get("url")
-
-        if not isinstance(raw_url, str):
-            continue
-
-        absolute_url = urljoin(_FACE_TO_FACE_BASE_URL, raw_url).split("?")[0]
-
-        if "/products/" not in absolute_url:
-            continue
-
-        if absolute_url not in urls:
-            urls.append(absolute_url)
-
-    return urls
 
 
 def _extract_product_urls(html: str) -> list[str]:
@@ -280,6 +358,123 @@ def _extract_finish(page_text: str, raw_title: str | None) -> Finish:
         return _finish_from_text(raw_title)
 
     return Finish.NONFOIL
+
+
+def _build_deck_builder_payload(card_names: list[str]) -> dict[str, Any]:
+    return {
+        "sort": False,
+        "filters": [
+            {
+                "field": "Card Name",
+                "values": card_names,
+            },
+            {
+                "field": "in_stock",
+                "values": ["1"],
+            },
+        ],
+    }
+
+
+def _card_cache_key(requested_card: RequestedCard) -> str:
+    return _simple_normalize(requested_card.normalized_name)
+
+
+def _find_card_products(cards: dict[Any, Any], requested_card_name: str) -> list[Any]:
+    exact_products = cards.get(requested_card_name)
+
+    if isinstance(exact_products, list):
+        return exact_products
+
+    normalized_requested_name = _simple_normalize(requested_card_name)
+
+    for card_name, products in cards.items():
+        if not isinstance(card_name, str):
+            continue
+
+        if _simple_normalize(card_name) == normalized_requested_name and isinstance(products, list):
+            return products
+
+    return []
+
+
+def _safe_dict(value: Any, key: str) -> dict[Any, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    nested_value = value.get(key)
+
+    if isinstance(nested_value, dict):
+        return nested_value
+
+    return None
+
+
+def _safe_string(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+
+    if isinstance(value, int | float):
+        return str(value)
+
+    return None
+
+
+def _extract_variant_condition(variant: dict[str, Any]) -> CardCondition | None:
+    selected_options = variant.get("selectedOptions")
+
+    if not isinstance(selected_options, list):
+        return None
+
+    for option in selected_options:
+        if not isinstance(option, dict):
+            continue
+
+        name = _safe_string(option.get("name"))
+
+        if name is None or _simple_normalize(name) != "condition":
+            continue
+
+        value = _safe_string(option.get("value"))
+
+        if value is None:
+            return None
+
+        return _CONDITION_LABELS.get(_simple_normalize(value).upper())
+
+    return None
+
+
+def _extract_variant_price(variant: dict[str, Any]) -> Decimal | None:
+    raw_price = variant.get("price")
+
+    if isinstance(raw_price, int | float):
+        return Decimal(str(raw_price))
+
+    if isinstance(raw_price, str):
+        cleaned = raw_price.replace("$", "").replace("CAD", "").strip()
+
+        try:
+            return Decimal(cleaned)
+        except Exception:
+            return None
+
+    return None
+
+
+def _extract_variant_quantity(variant: dict[str, Any]) -> int:
+    raw_quantity = variant.get("inventoryQuantity")
+
+    if isinstance(raw_quantity, int):
+        return raw_quantity
+
+    if isinstance(raw_quantity, str):
+        try:
+            return int(raw_quantity)
+        except ValueError:
+            return 0
+
+    return 0
 
 
 def _finish_from_text(value: str) -> Finish:

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Protocol, runtime_checkable
 
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
@@ -17,4 +18,10 @@ class StoreAdapter(ABC):
 
     @abstractmethod
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
+        raise NotImplementedError
+
+
+@runtime_checkable
+class BatchStoreAdapter(Protocol):
+    def preload_cards(self, requested_cards: list[RequestedCard]) -> None:
         raise NotImplementedError
