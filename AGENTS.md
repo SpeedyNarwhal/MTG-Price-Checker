@@ -144,16 +144,18 @@ HTTP errors, parsing failures, unexpected response shapes, etc.
 Strategy (JSON-first):
 
 1. Search via Shopify Predictive Search:
-   `/search/suggest.json?q=...&resources[type]=product&resources[limit]=N`
-2. Parse product URLs from JSON (HTML search fallback only if suggest is empty)
-3. Fetch product details via `/products/{handle}.js`
-4. Parse condition/price/inventory from variant JSON (HTML product page fallback)
+   `/search/suggest.json?q=...&resources[type]=product&resources[limit]=10&resources[limit_scope]=each`
+2. Also fetch full HTML search page and merge product URLs (relevance order, no price sort)
+3. Parse product URLs from JSON (never skip HTML search when suggest returns results)
+4. Fetch product details via `/products/{handle}.js` for up to N candidates
+5. Parse condition/price/inventory from variant JSON (HTML product page fallback)
 
 Notes:
 
 - Uses shared helpers in `shopify_common.py`
 - Session warmup + browser-like headers reduce 403 rate limits
-- Default max products per card: 2
+- Default max product detail fetches per card: 12
+- Exact card name match filters wrong-TCG search hits before price comparison
 
 ---
 
@@ -161,15 +163,16 @@ Notes:
 
 Strategy (JSON-first):
 
-1. Search via `/search/suggest.json` (HTML search fallback only if suggest is empty)
-2. Fetch `/products/{handle}.js` for each candidate product
+1. Search via `/search/suggest.json` plus full HTML search merge (relevance order, no price sort)
+2. Fetch `/products/{handle}.js` for up to N candidate products
 3. Parse variants for condition, price, inventory
 4. HTML product page fallback only for non-403 parse failures
 
 Notes:
 
 - Uses shared helpers in `shopify_common.py`
-- Default max products per card: 5
+- Default max product detail fetches per card: 12
+- Exact card name match filters wrong-TCG search hits before price comparison
 
 ---
 
@@ -246,6 +249,7 @@ It should:
 - make ONE POST request for the full card list
 - preload all results
 - store quotes internally
+- parse **all** in-stock printings returned for each card (no pre-price truncation)
 
 `search_card()` should:
 

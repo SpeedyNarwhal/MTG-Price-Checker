@@ -20,6 +20,10 @@ class StoreAdapter(ABC):
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
         raise NotImplementedError
 
+    @property
+    def last_listings_checked(self) -> int:
+        return 0
+
 
 @runtime_checkable
 class BatchStoreAdapter(Protocol):

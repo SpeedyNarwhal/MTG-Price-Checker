@@ -46,8 +46,8 @@ def main() -> None:
         type=_positive_int,
         default=None,
         help=(
-            "Maximum number of candidate product pages to check per card per store. "
-            "Defaults: Danireon=2, Silver Goblin=5."
+            "Maximum number of product detail pages to fetch per card after search discovery. "
+            "Defaults: Danireon=12, Silver Goblin=12, Face to Face HTML fallback=5."
         ),
     )
 

@@ -50,7 +50,9 @@ class FaceToFaceStoreAdapter(StoreAdapter):
         self._http_client = http_client or HttpClient()
         self._max_products_to_check = max_products_to_check
         self._quotes_by_card_name: dict[str, list[StoreQuote]] = {}
+        self._listings_checked_by_card_name: dict[str, int] = {}
         self._preloaded_card_names: set[str] = set()
+        self._last_listings_checked = 0
 
     @property
     def store_id(self) -> str:
@@ -59,6 +61,10 @@ class FaceToFaceStoreAdapter(StoreAdapter):
     @property
     def display_name(self) -> str:
         return "Face to Face"
+
+    @property
+    def last_listings_checked(self) -> int:
+        return self._last_listings_checked
 
     def preload_cards(self, requested_cards: list[RequestedCard]) -> None:
         unique_cards_by_key = {
@@ -78,25 +84,35 @@ class FaceToFaceStoreAdapter(StoreAdapter):
         cards = _safe_dict(deck_builder_response, "Cards")
 
         for normalized_key, requested_card in unique_cards_by_key.items():
-            self._quotes_by_card_name[normalized_key] = (
-                parse_face_to_face_deck_builder_cards(
+            if cards is None:
+                self._quotes_by_card_name[normalized_key] = []
+                self._listings_checked_by_card_name[normalized_key] = 0
+            else:
+                quotes, listings_checked = parse_face_to_face_deck_builder_cards(
                     cards=cards,
                     requested_card=requested_card,
-                    max_products_to_check=self._max_products_to_check,
                 )
-                if cards is not None
-                else []
-            )
+                self._quotes_by_card_name[normalized_key] = quotes
+                self._listings_checked_by_card_name[normalized_key] = listings_checked
+
             self._preloaded_card_names.add(normalized_key)
 
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
         normalized_key = _card_cache_key(requested_card)
 
         if normalized_key in self._preloaded_card_names:
+            self._last_listings_checked = self._listings_checked_by_card_name.get(
+                normalized_key,
+                0,
+            )
             return self._quotes_by_card_name.get(normalized_key, [])
 
         try:
             self.preload_cards([requested_card])
+            self._last_listings_checked = self._listings_checked_by_card_name.get(
+                normalized_key,
+                0,
+            )
             return self._quotes_by_card_name.get(normalized_key, [])
 
         except requests.HTTPError as exc:
@@ -108,8 +124,10 @@ class FaceToFaceStoreAdapter(StoreAdapter):
 
         product_urls = self._search_product_urls_from_pages(requested_card)
         quotes: list[StoreQuote] = []
+        product_urls_to_check = product_urls[: self._max_products_to_check]
+        self._last_listings_checked = len(product_urls_to_check)
 
-        for product_url in product_urls[: self._max_products_to_check]:
+        for product_url in product_urls_to_check:
             product_html = self._http_client.get_text(product_url)
             quotes.extend(
                 parse_face_to_face_product_page(
@@ -136,29 +154,23 @@ class FaceToFaceStoreAdapter(StoreAdapter):
 def parse_face_to_face_deck_builder_response(
     payload: Any,
     requested_card: RequestedCard,
-    max_products_to_check: int | None = None,
-) -> list[StoreQuote]:
+) -> tuple[list[StoreQuote], int]:
     cards = _safe_dict(payload, "Cards")
 
     return parse_face_to_face_deck_builder_cards(
         cards=cards,
         requested_card=requested_card,
-        max_products_to_check=max_products_to_check,
     )
 
 
 def parse_face_to_face_deck_builder_cards(
     cards: dict[Any, Any] | None,
     requested_card: RequestedCard,
-    max_products_to_check: int | None = None,
-) -> list[StoreQuote]:
+) -> tuple[list[StoreQuote], int]:
     if cards is None:
-        return []
+        return [], 0
 
     products = _find_card_products(cards, requested_card.normalized_name)
-
-    if max_products_to_check is not None:
-        products = products[:max_products_to_check]
 
     quotes: list[StoreQuote] = []
 
@@ -218,7 +230,7 @@ def parse_face_to_face_deck_builder_cards(
                 )
             )
 
-    return quotes
+    return quotes, len(products)
 
 
 def parse_face_to_face_product_page(

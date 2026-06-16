@@ -50,14 +50,14 @@ def build_stores(
             stores.append(
                 DanireonStoreAdapter(
                     http_client=shopify_http_client,
-                    max_products_to_check=options.max_products_per_card or 2,
+                    max_products_to_check=options.max_products_per_card or 12,
                 )
             )
         elif normalized_store_id in {"silvergoblin", "silver-goblin", "silver_goblin"}:
             stores.append(
                 SilverGoblinStoreAdapter(
                     http_client=shopify_http_client,
-                    max_products_to_check=options.max_products_per_card or 5,
+                    max_products_to_check=options.max_products_per_card or 12,
                 )
             )
         elif normalized_store_id in {"facetoface", "face-to-face", "face_to_face", "f2f"}:

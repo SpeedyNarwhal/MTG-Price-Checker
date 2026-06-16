@@ -11,6 +11,8 @@ from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
 from mtg_price_checker.infra.http_client import HttpClient
 
+_SUGGEST_MAX_PRODUCTS = 10
+
 _CONDITION_LABELS = {
     "Near Mint": CardCondition.NEAR_MINT,
     "Lightly Played": CardCondition.LIGHTLY_PLAYED,
@@ -24,7 +26,31 @@ def search_product_urls(
     http_client: HttpClient,
     base_url: str,
     query: str,
-    limit: int,
+) -> list[str]:
+    suggest_urls = _fetch_suggest_product_urls(http_client, base_url, query)
+    html_urls = _fetch_html_search_product_urls(http_client, base_url, query)
+    return merge_product_urls(suggest_urls, html_urls)
+
+
+def merge_product_urls(*url_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    for urls in url_lists:
+        for url in urls:
+            if url in seen:
+                continue
+
+            seen.add(url)
+            merged.append(url)
+
+    return merged
+
+
+def _fetch_suggest_product_urls(
+    http_client: HttpClient,
+    base_url: str,
+    query: str,
 ) -> list[str]:
     try:
         suggest_json = http_client.get_json(
@@ -32,18 +58,25 @@ def search_product_urls(
             params={
                 "q": query,
                 "resources[type]": "product",
-                "resources[limit]": str(limit),
+                "resources[limit]": str(_SUGGEST_MAX_PRODUCTS),
+                "resources[limit_scope]": "each",
             },
             referer=f"{base_url}/",
         )
-        product_urls = extract_product_urls_from_suggest_json(suggest_json, base_url)
-
-        if product_urls:
-            return product_urls
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code in {403, 429}:
             raise
 
+        return []
+
+    return extract_product_urls_from_suggest_json(suggest_json, base_url)
+
+
+def _fetch_html_search_product_urls(
+    http_client: HttpClient,
+    base_url: str,
+    query: str,
+) -> list[str]:
     search_html = http_client.get_text(
         f"{base_url}/search",
         params={
@@ -146,7 +179,7 @@ def parse_shopify_condition_variants(
 
     matched_card_name = extract_card_name_from_title(title)
 
-    if not _card_names_match(requested_card.normalized_name, matched_card_name):
+    if not card_names_match(requested_card.normalized_name, matched_card_name):
         return []
 
     collector_number = extract_collector_number(title) if extract_collector_number else None
@@ -272,7 +305,7 @@ def _extract_price_from_variant(variant: dict[str, Any]) -> Decimal | None:
     return None
 
 
-def _card_names_match(requested_name: str, matched_name: str) -> bool:
+def card_names_match(requested_name: str, matched_name: str) -> bool:
     return _simple_normalize(requested_name) == _simple_normalize(matched_name)
 
 

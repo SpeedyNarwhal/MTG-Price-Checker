@@ -44,10 +44,11 @@ class DanireonStoreAdapter(StoreAdapter):
     def __init__(
         self,
         http_client: HttpClient | None = None,
-        max_products_to_check: int = 2,
+        max_products_to_check: int = 12,
     ) -> None:
         self._http_client = http_client or HttpClient()
         self._max_products_to_check = max_products_to_check
+        self._last_listings_checked = 0
 
     @property
     def store_id(self) -> str:
@@ -57,17 +58,22 @@ class DanireonStoreAdapter(StoreAdapter):
     def display_name(self) -> str:
         return "Danireon"
 
+    @property
+    def last_listings_checked(self) -> int:
+        return self._last_listings_checked
+
     def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
         product_urls = search_product_urls(
             self._http_client,
             _DANIREON_BASE_URL,
             requested_card.normalized_name,
-            self._max_products_to_check,
         )
+        product_urls_to_check = product_urls[: self._max_products_to_check]
+        self._last_listings_checked = len(product_urls_to_check)
 
         quotes: list[StoreQuote] = []
 
-        for product_url in product_urls[: self._max_products_to_check]:
+        for product_url in product_urls_to_check:
             quotes.extend(
                 self._fetch_product_quotes(
                     product_url=product_url,

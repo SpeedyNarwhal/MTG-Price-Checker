@@ -32,6 +32,8 @@ def build_price_result(
     requested_card: RequestedCard,
     store_id: str,
     quotes: list[StoreQuote],
+    *,
+    listings_checked: int | None = None,
 ) -> PriceResult:
     if not quotes:
         return PriceResult(
@@ -51,12 +53,17 @@ def build_price_result(
             notes="Listings found, but no NM in-stock copy matched preferences.",
         )
 
+    notes = None
+    if listings_checked is not None and listings_checked > 0:
+        notes = f"Checked {listings_checked} product listings."
+
     return PriceResult(
         requested_card=requested_card,
         store_id=store_id,
         status=ResultStatus.FOUND,
         lowest_nm_price_cad=best_quote.price_cad,
         product_url=best_quote.product_url,
+        notes=notes,
     )
 
 
@@ -102,7 +109,14 @@ def check_prices(
                 if preload_error is not None:
                     raise preload_error
 
-                result = build_price_result(card, store.store_id, store.search_card(card))
+                quotes = store.search_card(card)
+                listings_checked = store.last_listings_checked
+                result = build_price_result(
+                    card,
+                    store.store_id,
+                    quotes,
+                    listings_checked=listings_checked,
+                )
             except Exception as exc:
                 status_code = _circuit_breaker_status_code(exc)
 

@@ -253,10 +253,12 @@ def test_parse_face_to_face_deck_builder_response_with_nm_in_stock() -> None:
         normalized_name="Sol Ring",
     )
 
-    quotes = parse_face_to_face_deck_builder_response(
+    quotes, listings_checked = parse_face_to_face_deck_builder_response(
         payload=payload,
         requested_card=requested_card,
     )
+
+    assert listings_checked == 1
 
     nm_quote = next(quote for quote in quotes if quote.condition == CardCondition.NEAR_MINT)
 
@@ -303,10 +305,12 @@ def test_parse_face_to_face_deck_builder_response_parses_pl_but_checker_ignores_
         normalized_name="Sol Ring",
     )
 
-    quotes = parse_face_to_face_deck_builder_response(
+    quotes, listings_checked = parse_face_to_face_deck_builder_response(
         payload=payload,
         requested_card=requested_card,
     )
+
+    assert listings_checked == 1
     best_quote = choose_lowest_nm_in_stock_quote(requested_card, quotes)
 
     assert len(quotes) == 1
@@ -387,3 +391,43 @@ def test_face_to_face_preload_cards_batches_multiple_card_names() -> None:
 
     assert arcane_signet_quotes[0].matched_card_name == "Arcane Signet"
     assert arcane_signet_quotes[0].price_cad == Decimal("1.29")
+
+
+def _deck_builder_product(handle: str, price: str) -> dict:
+    return {
+        "_source": {
+            "General_Card_Name": "Arcane Signet",
+            "handle": handle,
+            "MTG_Set_Name": "Test Set",
+            "MTG_Collector_Number": "001",
+            "MTG_Foil_Option": "Non-Foil",
+            "variants": [
+                {
+                    "selectedOptions": [{"name": "Condition", "value": "NM"}],
+                    "price": price,
+                    "inventoryQuantity": 2,
+                }
+            ],
+        }
+    }
+
+
+def test_parse_face_to_face_deck_builder_parses_all_products_for_cheapest_nm() -> None:
+    products = [
+        _deck_builder_product(f"arcane-signet-{index}", f"{index + 1}.00") for index in range(7)
+    ]
+    products.append(_deck_builder_product("arcane-signet-cheapest", "0.75"))
+
+    payload = {"Cards": {"Arcane Signet": products}}
+    requested_card = RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet")
+
+    quotes, listings_checked = parse_face_to_face_deck_builder_response(
+        payload=payload,
+        requested_card=requested_card,
+    )
+    best_quote = choose_lowest_nm_in_stock_quote(requested_card, quotes)
+
+    assert listings_checked == 8
+    assert best_quote is not None
+    assert best_quote.price_cad == Decimal("0.75")
+    assert best_quote.product_url == "https://facetofacegames.com/products/arcane-signet-cheapest"
