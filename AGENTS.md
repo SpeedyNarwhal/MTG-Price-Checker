@@ -10,19 +10,47 @@ Input:
 
 Output:
 
-- A CSV matrix:
+- A CSV price matrix:
 
   - rows = cards
   - columns = stores
   - cell = lowest Near Mint in-stock CAD price OR status indicator
 
-A second audit CSV provides debugging and traceability details:
+- An optional audit CSV (only when `--audit` is set) with debugging and traceability details:
 
-- status
-- chosen product URL
-- notes/errors
+  - status
+  - chosen product URL
+  - notes/errors
 
 The project is intentionally modular so new stores can be added independently.
+
+---
+
+# Input File Format
+
+Parsed by `input/decklist_parser.py`:
+
+- One card per line
+- Optional quantity prefix: `4 Sol Ring` (quantity is parsed but **not used** in pricing today)
+- Lines starting with `#` are treated as comments and ignored
+- Encodings tried in order: `utf-8-sig`, `utf-8`, `utf-16`
+
+---
+
+# Output Format
+
+Written by `output/csv_writer.py`:
+
+**Price matrix cells:**
+
+- `FOUND` → `$X.XX`
+- `NOT_FOUND` / `OUT_OF_STOCK` → status string
+- `ERROR` → `ERROR: {notes}`
+
+**Audit CSV:**
+
+- Optional; requires `--audit path/to/audit.csv`
+- One row per card/store with status, price, product URL, and notes
 
 ---
 
@@ -33,10 +61,11 @@ Implemented:
 - Danireon
 - Silver Goblin
 - Face to Face Games
+- `demo` — offline fake Face to Face + Danireon adapters (Sol Ring / Arcane Signet only; no HTTP)
 
 Planned:
 
-- Imaginaire
+- Imaginaire (milestone 5 — `milestone-5-imaginaire` branch)
 
 ---
 
@@ -45,13 +74,27 @@ Planned:
 ```text
 src/mtg_price_checker/
 ├── cli.py
-├── models/
+├── domain/
 ├── stores/
+│   ├── danireon.py
+│   ├── silvergoblin.py
+│   ├── facetoface.py
+│   ├── shopify_common.py
+│   └── fake.py
 ├── services/
+│   ├── price_checker.py
+│   └── store_registry.py
 ├── infra/
+│   ├── http_client.py
+│   └── browser_http_client.py
 ├── input/
+│   └── decklist_parser.py
 ├── output/
+│   └── csv_writer.py
 └── tests/
+
+scripts/
+└── debug_http_status.py
 ```
 
 ## Important Modules
@@ -68,38 +111,81 @@ Current adapters:
 - `silvergoblin.py`
 - `facetoface.py`
 - `shopify_common.py` (shared Shopify JSON helpers)
+- `fake.py` (demo/offline adapters)
 
 ### `services/price_checker.py`
 
 Shared orchestration logic:
 
-- loops through stores/cards
-- selects lowest valid quote
-- handles statuses
-- now contains store circuit-breaker logic
+- batch preload for `BatchStoreAdapter` stores (Face to Face) before the card loop
+- per-card store queries (sequential or parallel via `ThreadPoolExecutor`)
+- selects lowest valid NM in-stock quote (respects `finish_preference`)
+- handles statuses and audit notes (`Checked N product listings.`)
+- store circuit-breaker logic (403/429 disables store for remainder of run)
+- thread-safe circuit breaker when `--parallel-stores` is active
+- progress logging to stderr for lists over 20 cards: `[i/N] Card — Store STATUS, ...`
+
+```mermaid
+flowchart TD
+    preload[F2F preload_cards batch POST]
+    cardLoop[For each card]
+    parallel{parallel_stores?}
+    threadPool[ThreadPoolExecutor per store]
+    sequential[Sequential store loop]
+    query[search_card + build_price_result]
+    breaker[Circuit breaker on 403/429]
+
+    preload --> cardLoop
+    cardLoop --> parallel
+    parallel -->|yes| threadPool --> query
+    parallel -->|no| sequential --> query
+    query --> breaker
+```
+
+### `services/store_registry.py`
+
+Store wiring via `build_stores()`:
+
+- each real store adapter gets its **own** `HttpClient` or `BrowserHttpClient` instance (separate session and rate-limit clock)
+- all clients share the same disk cache directory (`.cache/http`, keyed by URL hash)
+- `--use-browser` applies to Danireon and Silver Goblin only; Face to Face always uses plain `HttpClient`
+- per-store default max products: Danireon 12, Silver Goblin 12, Face to Face 5
+
+Supported store IDs and aliases:
+
+- `danireon`
+- `silvergoblin`, `silver-goblin`, `silver_goblin`
+- `facetoface`, `face-to-face`, `face_to_face`, `f2f`
+- `demo`
 
 ### `infra/http_client.py`
 
 Shared HTTP infrastructure:
 
-- request delay
-- caching
-- cache TTL
-- JSON/text helpers
-- POST JSON support
+- request delay (`min_seconds_between_requests`)
+- disk caching (GET and POST)
+- 429 retry with `Retry-After` or 45s backoff (up to 2 retries)
+- GET text / GET JSON / POST JSON helpers (via shared `requests.Session`)
+- per-host session warmup (homepage visit before first request)
+- browser navigation headers (`Referer`, `Sec-Fetch-*`)
+- optional cookies file import
 
-### `models/`
+### `infra/browser_http_client.py`
+
+Playwright-backed HTTP client for Shopify stores when `--use-browser` is set:
+
+- no disk cache
+- no `min_seconds_between_requests` throttling
+- requires `pip install mtg-price-checker[browser]` and `playwright install chromium`
+
+### `domain/`
 
 Shared domain models:
 
-- `RequestedCard`
+- `RequestedCard` (includes `finish_preference`, default `EITHER`)
 - `StoreQuote`
 - `PriceResult`
-- enums for:
-
-  - condition
-  - finish
-  - result status
+- enums for condition, finish, result status
 
 ---
 
@@ -112,10 +198,22 @@ The app only considers:
 - Near Mint (`NM`)
 - in-stock
 - CAD prices
+- finish matching `RequestedCard.finish_preference` (default: either foil or nonfoil)
 
 The final selected result per store/card is:
 
 - lowest valid NM in-stock price
+
+## Product Discovery — No Price-Sorted Search
+
+**Never sort search results by price.** Stores mix TCGs; cheap wrong-game products can rank first if sorted by price.
+
+Safe pipeline:
+
+1. Discover product URLs in relevance order (suggest + HTML search merge)
+2. Fetch up to N candidate product pages
+3. Exact card name match filters wrong-TCG hits
+4. Choose lowest NM in-stock quote among valid matches
 
 ## Status Semantics
 
@@ -166,7 +264,7 @@ Strategy (JSON-first):
 1. Search via `/search/suggest.json` plus full HTML search merge (relevance order, no price sort)
 2. Fetch `/products/{handle}.js` for up to N candidate products
 3. Parse variants for condition, price, inventory
-4. HTML product page fallback only for non-403 parse failures
+4. HTML product page fallback only for non-403/429 parse failures
 
 Notes:
 
@@ -179,17 +277,17 @@ Notes:
 # Face to Face Games
 
 IMPORTANT:
-Face to Face no longer uses HTML search scraping.
+The **primary** path uses the Deck Builder JSON endpoint, not HTML search scraping.
 
-It now uses the Deck Builder JSON endpoint.
+## Primary Path — Deck Builder Batch POST
 
-## Endpoint
+### Endpoint
 
 ```text
 POST https://facetofacegames.com/apps/prod-indexer/deckBuilder/search
 ```
 
-## Payload Shape
+### Payload Shape
 
 ```json
 {
@@ -207,7 +305,7 @@ POST https://facetofacegames.com/apps/prod-indexer/deckBuilder/search
 }
 ```
 
-## Response Shape
+### Response Shape
 
 Useful data is under:
 
@@ -240,7 +338,7 @@ Condition is found in:
 - `selectedOptions`
 - option name `"Condition"`
 
-## Batch Preload Architecture
+### Batch Preload Architecture
 
 Face to Face supports batch loading.
 
@@ -258,8 +356,7 @@ It should:
 
 This is implemented via:
 
-- optional preload/batch adapter behavior
-- preload call before card/store loops
+- `BatchStoreAdapter` protocol and `preload_cards()` call before card/store loops
 
 This dramatically improves:
 
@@ -267,38 +364,50 @@ This dramatically improves:
 - request count
 - reliability
 
+## Fallback Path — HTML Search
+
+If batch preload fails (except HTTP 429, which is re-raised):
+
+1. HTML search page `/search?q=...&type=product`
+2. Up to N product detail pages (default 5)
+3. Parse condition/price from product HTML
+
+This fallback exists in `facetoface.py` but should not be the normal code path.
+
 ---
 
 # HTTP Infrastructure
 
 ## Shared HttpClient Features
 
-The app uses a shared HTTP client.
-
 Features:
 
-- request delay
-- caching
-- retry behavior
-- GET text helper
-- GET JSON helper
-- POST JSON helper (via shared Session)
-- per-host session warmup (homepage visit before first request)
-- browser navigation headers (`Referer`, `Sec-Fetch-*`)
+- request delay between live (uncached) requests
+- disk caching for GET and POST responses
+- 429 retry: up to 2 retries, honoring `Retry-After` header or 45s backoff
+- GET text / GET JSON / POST JSON helpers
+- per-host session warmup
+- browser navigation headers
 - optional cookies file import
+
+Note: 429 retry is distinct from the circuit breaker. Retries happen within a single request; the circuit breaker disables the entire store for the run after a 403 or 429 propagates as an error.
 
 ## Cache
 
 Cache entries currently expire after:
 
-- 24 hours
+- 24 hours (configurable via `--cache-ttl-hours`)
 
 Reason:
 Store inventory updates daily.
 
+Cache directory: `.cache/http` (URL-hash filenames, shared across all store HttpClient instances).
+
+Cache hits skip both network requests and request-delay sleeps.
+
 ## Request Delay
 
-The app intentionally spaces requests to avoid hammering stores.
+The app intentionally spaces live HTTP requests to avoid hammering stores.
 
 CLI tuning options exist for:
 
@@ -311,7 +420,7 @@ CLI tuning options exist for:
 
 # Store Circuit Breaker
 
-The app now disables stores during a run after:
+The app disables stores during a run after:
 
 - HTTP 403
 - HTTP 429
@@ -332,6 +441,8 @@ Behavior:
 
 Other stores continue normally.
 
+In parallel mode, circuit-breaker state updates are protected by a thread lock.
+
 ---
 
 # HTTP Headers and Session Behavior
@@ -351,6 +462,21 @@ Session behavior:
 
 ---
 
+# Tools / Diagnostics
+
+## `scripts/debug_http_status.py`
+
+Probes Danireon and Silver Goblin HTTP behavior under run-like patterns (cold vs warmed session, suggest vs product fetch).
+
+```powershell
+python scripts/debug_http_status.py
+python scripts/debug_http_status.py --cards "Sol Ring" "Counterspell" --delay-seconds 2
+```
+
+Useful when diagnosing 403/429 issues before tuning CLI flags.
+
+---
+
 # Troubleshooting 403 / 429 Errors
 
 If Shopify stores start returning errors again:
@@ -367,18 +493,25 @@ The circuit breaker disables a store for the remainder of a run after the first 
 
 # CLI Features
 
-Current CLI supports:
+Entry point: `mtg-prices` (or `python -m mtg_price_checker.cli`).
 
-- input file
-- output CSV
-- audit CSV
-- selected stores
-- request delay tuning
-- max products per card
-- `--bulk` fast mode for large lists (50–100+ cards)
-- `--parallel-stores` / `--no-parallel-stores` for per-card store concurrency
-- `--cookies-file` for browser cookie import
-- `--use-browser` for Playwright-backed Danireon/Silver Goblin requests
+| Flag | Default | Notes |
+|------|---------|-------|
+| `input_file` | (required) | Deck list text file |
+| `--stores` | `danireon` | Space-separated store IDs |
+| `--output` / `-o` | `output/prices.csv` | Price matrix CSV |
+| `--audit` | off | Optional audit CSV path |
+| `--max-products-per-card` | per-store defaults | Bulk sets 8 unless overridden |
+| `--request-delay-seconds` | 8.0 accurate / 2.0 bulk | Resolved by `build_cli_run_options()` |
+| `--cache-ttl-hours` | 24 | Cache TTL |
+| `--no-cache` | off | Disable cache reads/writes |
+| `--cookies-file` | off | Netscape cookie export |
+| `--use-browser` | off | Playwright for Danireon + Silver Goblin |
+| `--bulk` | off | Fast mode preset (see below) |
+| `--parallel-stores` | off | Parallel per-card store queries; auto-on with `--bulk` |
+| `--no-parallel-stores` | off | Force sequential even with `--bulk` |
+
+Progress lines on stderr are automatic when the input list has more than 20 cards.
 
 ## Accurate mode (default)
 
@@ -399,7 +532,7 @@ mtg-prices cards.txt `
 
 ## Bulk mode (`--bulk`)
 
-Fast scan for large deck lists (~25–35 minutes cold for ~84 cards across three stores):
+Fast scan for large deck lists (~20–25 minutes cold for ~84 cards across three stores; verified ~22 min smoke test with 0 ERROR rows):
 
 - `--request-delay-seconds 2`
 - `--max-products-per-card 8`
@@ -418,6 +551,8 @@ Each store adapter gets its own `HttpClient` instance so parallel Shopify reques
 
 Explicit flags override bulk presets, e.g. `--bulk --request-delay-seconds 5`.
 
+Cached replay (same day, omit `--no-cache`): typically a few minutes regardless of mode.
+
 ---
 
 # Testing
@@ -426,11 +561,14 @@ The project uses pytest.
 
 Important tests:
 
-- parser tests per store
+- parser tests per store (`test_danireon_parser.py`, `test_silver_goblin_parser.py`, `test_face_to_face_parser.py`)
 - Face to Face batch preload tests
-- circuit breaker tests
+- circuit breaker and parallel vs sequential parity tests (`test_price_checker.py`)
 - quote selection tests
-- Shopify common helper tests
+- Shopify common helper tests (`test_shopify_common.py`)
+- bulk CLI wiring (`test_cli.py`)
+- per-store HttpClient instances (`test_store_registry.py`)
+- decklist parser tests (`test_decklist_parser.py`)
 
 Always run before commit:
 
@@ -471,7 +609,7 @@ Preferred order of strategies:
 
 Potential future milestones:
 
-- Imaginaire adapter
+- Imaginaire adapter (milestone 5 — in progress)
 - async request pipeline
 - better fuzzy card matching
 - Scryfall metadata integration
@@ -484,17 +622,25 @@ Potential future milestones:
 
 # Known Current Situation
 
-All three stores are working with JSON-first strategies:
+Milestones 1–4 are merged to `main`:
+
+- Danireon, Silver Goblin, Face to Face adapters
+- reliability infrastructure (headers, cache, circuit breaker, cookies, Playwright fallback)
+- bulk mode with parallel store queries and per-store HttpClient instances
+
+All three live stores are working with JSON-first strategies:
 
 - **Face to Face**: stable, fastest adapter, single batch Deck Builder POST
 - **Danireon**: JSON suggest search + product `.js` parsing
 - **Silver Goblin**: JSON suggest search + product `.js` parsing
 
+**Current branch:** `milestone-5-imaginaire` — Imaginaire adapter (not yet implemented).
+
 Reliability features in place:
 
 - browser-like headers and session warmup
 - request throttling and 24h cache TTL
-- store circuit breaker on 403/429
+- 429 retry within requests; circuit breaker on persistent 403/429
 - optional cookies file and Playwright fallback for Shopify stores
 
 ---
