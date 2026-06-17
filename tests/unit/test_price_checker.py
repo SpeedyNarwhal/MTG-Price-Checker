@@ -201,6 +201,72 @@ def test_check_prices_disables_store_after_http_403_or_429(status_code: int) -> 
     assert second_result.notes == f"Store disabled for this run after HTTP {status_code}."
 
 
+class PricedStore(StoreAdapter):
+    def __init__(self, store_id: str, display_name: str, price: str) -> None:
+        self._store_id = store_id
+        self._display_name = display_name
+        self._price = Decimal(price)
+
+    @property
+    def store_id(self) -> str:
+        return self._store_id
+
+    @property
+    def display_name(self) -> str:
+        return self._display_name
+
+    def search_card(self, requested_card: RequestedCard) -> list[StoreQuote]:
+        return [
+            StoreQuote(
+                store_id=self.store_id,
+                requested_card_name=requested_card.normalized_name,
+                matched_card_name=requested_card.normalized_name,
+                condition=CardCondition.NEAR_MINT,
+                finish=Finish.NONFOIL,
+                price_cad=self._price,
+                in_stock=True,
+            )
+        ]
+
+
+def test_check_prices_parallel_matches_sequential_results() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    stores = [
+        PricedStore("store-a", "Store A", "1.00"),
+        PricedStore("store-b", "Store B", "2.00"),
+    ]
+
+    sequential_results = check_prices(requested_cards, stores, parallel_stores=False)
+    parallel_results = check_prices(requested_cards, stores, parallel_stores=True)
+
+    assert parallel_results == sequential_results
+
+
+def test_check_prices_parallel_circuit_breaker_is_thread_safe() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    failing_store = FailingHttpStore(403)
+    successful_store = SuccessfulStore()
+
+    results = check_prices(
+        requested_cards,
+        [failing_store, successful_store],
+        parallel_stores=True,
+    )
+
+    assert failing_store.call_count == 1
+    assert successful_store.call_count == 2
+    assert results["Sol Ring"]["failing"].status == ResultStatus.ERROR
+    assert results["Arcane Signet"]["failing"].status == ResultStatus.ERROR
+    assert results["Sol Ring"]["successful"].status == ResultStatus.FOUND
+    assert results["Arcane Signet"]["successful"].status == ResultStatus.FOUND
+
+
 def test_check_prices_disabled_store_does_not_stop_other_stores() -> None:
     requested_cards = [
         RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),

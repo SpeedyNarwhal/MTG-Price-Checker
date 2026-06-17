@@ -27,18 +27,6 @@ def build_stores(
 ) -> list[StoreAdapter]:
     options = options or StoreBuildOptions()
 
-    http_config = HttpClientConfig(
-        min_seconds_between_requests=options.request_delay_seconds,
-        cache_ttl_seconds=options.cache_ttl_seconds,
-        use_cache=options.use_cache,
-        cookies_file=options.cookies_file,
-    )
-
-    http_client: Any = HttpClient(http_config)
-    shopify_http_client: Any = (
-        BrowserHttpClient(http_config) if options.use_browser else http_client
-    )
-
     stores: list[StoreAdapter] = []
 
     for store_id in store_ids:
@@ -49,21 +37,21 @@ def build_stores(
         elif normalized_store_id == "danireon":
             stores.append(
                 DanireonStoreAdapter(
-                    http_client=shopify_http_client,
+                    http_client=_build_http_client(options, use_browser=options.use_browser),
                     max_products_to_check=options.max_products_per_card or 12,
                 )
             )
         elif normalized_store_id in {"silvergoblin", "silver-goblin", "silver_goblin"}:
             stores.append(
                 SilverGoblinStoreAdapter(
-                    http_client=shopify_http_client,
+                    http_client=_build_http_client(options, use_browser=options.use_browser),
                     max_products_to_check=options.max_products_per_card or 12,
                 )
             )
         elif normalized_store_id in {"facetoface", "face-to-face", "face_to_face", "f2f"}:
             stores.append(
                 FaceToFaceStoreAdapter(
-                    http_client=http_client,
+                    http_client=_build_http_client(options, use_browser=False),
                     max_products_to_check=options.max_products_per_card or 5,
                 )
             )
@@ -71,3 +59,17 @@ def build_stores(
             raise ValueError(f"Unsupported store: {store_id}")
 
     return stores
+
+
+def _build_http_client(options: StoreBuildOptions, *, use_browser: bool) -> Any:
+    http_config = HttpClientConfig(
+        min_seconds_between_requests=options.request_delay_seconds,
+        cache_ttl_seconds=options.cache_ttl_seconds,
+        use_cache=options.use_cache,
+        cookies_file=options.cookies_file,
+    )
+
+    if use_browser:
+        return BrowserHttpClient(http_config)
+
+    return HttpClient(http_config)

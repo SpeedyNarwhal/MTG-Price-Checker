@@ -375,19 +375,48 @@ Current CLI supports:
 - selected stores
 - request delay tuning
 - max products per card
+- `--bulk` fast mode for large lists (50–100+ cards)
+- `--parallel-stores` / `--no-parallel-stores` for per-card store concurrency
 - `--cookies-file` for browser cookie import
 - `--use-browser` for Playwright-backed Danireon/Silver Goblin requests
 
-Example:
+## Accurate mode (default)
+
+Best for small lists or when you want the broadest product discovery:
+
+- `--request-delay-seconds 8` (default)
+- `--max-products-per-card 12` for Shopify stores (default)
+- sequential store queries
 
 ```powershell
 mtg-prices cards.txt `
   --stores danireon silvergoblin facetoface `
   --request-delay-seconds 8 `
-  --max-products-per-card 5 `
+  --max-products-per-card 12 `
   --output output/prices.csv `
   --audit output/audit.csv
 ```
+
+## Bulk mode (`--bulk`)
+
+Fast scan for large deck lists (~25–35 minutes cold for ~84 cards across three stores):
+
+- `--request-delay-seconds 2`
+- `--max-products-per-card 8`
+- parallel store queries per card
+- progress lines on stderr for lists over 20 cards
+
+```powershell
+mtg-prices american-muscle-6-16.txt `
+  --bulk `
+  --stores danireon silvergoblin facetoface `
+  --output output/bulk-prices.csv `
+  --audit output/bulk-audit.csv
+```
+
+Each store adapter gets its own `HttpClient` instance so parallel Shopify requests do not share a single global rate-limit clock. Cache files are still shared by URL hash under `.cache/http`.
+
+Explicit flags override bulk presets, e.g. `--bulk --request-delay-seconds 5`.
 
 ---
 
@@ -487,7 +516,7 @@ mtg-prices f2f-test.txt `
   --audit output/f2f-audit.csv
 ```
 
-## Multi-store
+## Multi-store (accurate)
 
 ```powershell
 Set-Content -Path three-store-test.txt -Value @(
@@ -501,7 +530,17 @@ Set-Content -Path three-store-test.txt -Value @(
 mtg-prices three-store-test.txt `
   --stores danireon silvergoblin facetoface `
   --request-delay-seconds 8 `
-  --max-products-per-card 5 `
+  --max-products-per-card 12 `
   --output output/three-store-prices.csv `
   --audit output/three-store-audit.csv
+```
+
+## Bulk deck list
+
+```powershell
+mtg-prices american-muscle-6-16.txt `
+  --bulk `
+  --stores danireon silvergoblin facetoface `
+  --output output/bulk-prices.csv `
+  --audit output/bulk-audit.csv
 ```
