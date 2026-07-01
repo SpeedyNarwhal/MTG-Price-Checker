@@ -4,7 +4,11 @@ from pathlib import Path
 from mtg_price_checker.input.decklist_parser import parse_card_file
 from mtg_price_checker.output.csv_writer import write_audit_csv, write_price_matrix_csv
 from mtg_price_checker.services.price_checker import check_prices
-from mtg_price_checker.services.store_registry import StoreBuildOptions, build_stores
+from mtg_price_checker.services.store_registry import (
+    StoreBuildOptions,
+    build_stores,
+    close_store_http_clients,
+)
 
 _DEFAULT_REQUEST_DELAY_SECONDS = 8.0
 _BULK_REQUEST_DELAY_SECONDS = 2.0
@@ -27,7 +31,9 @@ def main() -> None:
         "--stores",
         nargs="+",
         default=["danireon"],
-        help="Stores to check. Supported: danireon, silvergoblin, facetoface, f2f, demo.",
+        help=(
+            "Stores to check. Supported: danireon, silvergoblin, facetoface, f2f, imaginaire, demo."
+        ),
     )
 
     parser.add_argument(
@@ -92,8 +98,67 @@ def main() -> None:
         action="store_true",
         help=(
             "Use Playwright for Danireon and Silver Goblin requests. "
+            "Imaginaire always uses browser/TLS transport. "
             "Install with: pip install mtg-price-checker[browser]"
         ),
+    )
+
+    parser.add_argument(
+        "--browser-headed",
+        action="store_true",
+        help=(
+            "Run Playwright in headed mode (visible browser window). "
+            "Use when Cloudflare verification requires manual interaction."
+        ),
+    )
+
+    parser.add_argument(
+        "--browser-only",
+        action="store_true",
+        help=("Skip curl_cffi TLS impersonation for Imaginaire and use Playwright only."),
+    )
+
+    parser.add_argument(
+        "--browser-profile-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Persistent browser profile directory for Imaginaire Cloudflare sessions. "
+            "Default: .cache/browser/imaginaire"
+        ),
+    )
+
+    parser.add_argument(
+        "--browser-manual-cf",
+        action="store_true",
+        help=(
+            "Headed mode: press Enter when the deck builder page is ready instead of "
+            "auto-detecting Cloudflare clearance."
+        ),
+    )
+
+    parser.add_argument(
+        "--browser-cdp-url",
+        default=None,
+        help=(
+            "Connect to an existing Chrome via CDP (e.g. http://127.0.0.1:9222). "
+            "Solve Cloudflare in that browser first."
+        ),
+    )
+
+    parser.add_argument(
+        "--browser-ui-post",
+        action="store_true",
+        help=(
+            "Imaginaire: paste deck list into the UI and click submit "
+            "(default on for CDP and headed browser-only)."
+        ),
+    )
+
+    parser.add_argument(
+        "--no-browser-ui-post",
+        action="store_true",
+        help="Imaginaire: force legacy in-page fetch POST instead of UI automation.",
     )
 
     parser.add_argument(
@@ -125,31 +190,34 @@ def main() -> None:
     )
 
     stores = build_stores(args.stores, options=store_options)
-    results = check_prices(
-        requested_cards,
-        stores,
-        parallel_stores=parallel_stores,
-        show_progress=show_progress,
-    )
+    try:
+        results = check_prices(
+            requested_cards,
+            stores,
+            parallel_stores=parallel_stores,
+            show_progress=show_progress,
+        )
 
-    write_price_matrix_csv(
-        output_path=args.output,
-        requested_cards=requested_cards,
-        stores=stores,
-        results=results,
-    )
-
-    print(f"Wrote price matrix to {args.output}")
-
-    if args.audit is not None:
-        write_audit_csv(
-            output_path=args.audit,
+        write_price_matrix_csv(
+            output_path=args.output,
             requested_cards=requested_cards,
             stores=stores,
             results=results,
         )
 
-        print(f"Wrote audit CSV to {args.audit}")
+        print(f"Wrote price matrix to {args.output}")
+
+        if args.audit is not None:
+            write_audit_csv(
+                output_path=args.audit,
+                requested_cards=requested_cards,
+                stores=stores,
+                results=results,
+            )
+
+            print(f"Wrote audit CSV to {args.audit}")
+    finally:
+        close_store_http_clients(stores)
 
 
 def build_cli_run_options(
@@ -172,6 +240,12 @@ def build_cli_run_options(
 
     show_progress = card_count > 20
 
+    browser_ui_post: bool | None = None
+    if getattr(args, "no_browser_ui_post", False):
+        browser_ui_post = False
+    elif getattr(args, "browser_ui_post", False):
+        browser_ui_post = True
+
     store_options = StoreBuildOptions(
         max_products_per_card=max_products_per_card,
         request_delay_seconds=request_delay_seconds,
@@ -179,6 +253,12 @@ def build_cli_run_options(
         use_cache=not args.no_cache,
         cookies_file=args.cookies_file,
         use_browser=args.use_browser,
+        browser_headless=not args.browser_headed,
+        browser_only=args.browser_only,
+        browser_manual_cf=args.browser_manual_cf,
+        browser_cdp_url=args.browser_cdp_url,
+        browser_ui_post=browser_ui_post,
+        browser_profile_dir=args.browser_profile_dir,
     )
 
     return store_options, parallel_stores, show_progress

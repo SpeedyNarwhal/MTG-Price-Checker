@@ -34,12 +34,21 @@ class HttpClientConfig:
     use_cache: bool = True
     cache_ttl_seconds: int = _SECONDS_IN_ONE_DAY
     cookies_file: Path | None = None
+    browser_headless: bool = True
+    browser_only: bool = False
+    browser_manual_cf: bool = False
+    browser_cdp_url: str | None = None
+    browser_ui_post: bool | None = None
+    browser_human_delays: bool = True
+    browser_profile_dir: Path | None = None
+    cloudflare_warmup_url: str | None = None
     warmup_hosts: bool = True
     warmup_host_urls: tuple[str, ...] = field(
         default_factory=lambda: (
             "https://www.danireon.com/",
             "https://silvergoblin.cards/",
             "https://facetofacegames.com/",
+            "https://imaginaire.com/",
         )
     )
 
@@ -118,6 +127,29 @@ class HttpClient:
 
         return json.loads(response_text)
 
+    def post_form(
+        self,
+        url: str,
+        data: dict[str, str],
+        *,
+        referer: str | None = None,
+    ) -> str:
+        cache_path = self._get_cache_path("POST", url, form_payload=data)
+
+        if self._config.use_cache and cache_path.exists():
+            if self._is_cache_file_fresh(cache_path):
+                return cache_path.read_text(encoding="utf-8")
+
+            cache_path.unlink(missing_ok=True)
+
+        response_text = self._post_form_uncached(url, data, referer=referer)
+
+        if self._config.use_cache:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(response_text, encoding="utf-8")
+
+        return response_text
+
     def _get_text_uncached(
         self,
         url: str,
@@ -175,6 +207,48 @@ class HttpClient:
             response = self._session.post(
                 url,
                 json=payload,
+                headers=headers,
+                timeout=self._config.timeout_seconds,
+            )
+
+            if response.status_code == 429 and attempt < self._config.max_retries:
+                retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                sleep_seconds = retry_after or self._config.retry_backoff_seconds
+                time.sleep(sleep_seconds)
+                continue
+
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                last_error = exc
+                break
+
+            return response.text
+
+        if last_error is not None:
+            raise last_error
+
+        raise RuntimeError(f"Failed to fetch URL: {url}")
+
+    def _post_form_uncached(
+        self,
+        url: str,
+        data: dict[str, str],
+        *,
+        referer: str | None = None,
+    ) -> str:
+        last_error: requests.HTTPError | None = None
+        headers = self._build_request_headers(referer=referer, accept_json=False)
+        headers["Accept"] = "text/plain, */*; q=0.01"
+        headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+
+        for attempt in range(self._config.max_retries + 1):
+            self._wait_for_rate_limit()
+            self._warmup_host_if_needed(url)
+
+            response = self._session.post(
+                url,
+                data=data,
                 headers=headers,
                 timeout=self._config.timeout_seconds,
             )
@@ -269,11 +343,13 @@ class HttpClient:
         url: str,
         params: dict[str, str] | None = None,
         json_payload: dict[str, Any] | None = None,
+        form_payload: dict[str, str] | None = None,
     ) -> Path:
         query = urlencode(params or {})
         payload = json.dumps(json_payload or {}, sort_keys=True, separators=(",", ":"))
+        form = urlencode(form_payload or {})
         cache_key = hashlib.sha256(
-            f"{method.upper()} {url}?{query} {payload}".encode("utf-8")
+            f"{method.upper()} {url}?{query} {payload} {form}".encode("utf-8")
         ).hexdigest()
         return self._config.cache_dir / f"{cache_key}.html"
 

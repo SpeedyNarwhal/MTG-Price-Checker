@@ -61,11 +61,12 @@ Implemented:
 - Danireon
 - Silver Goblin
 - Face to Face Games
+- Imaginaire
 - `demo` — offline fake Face to Face + Danireon adapters (Sol Ring / Arcane Signet only; no HTTP)
 
 Planned:
 
-- Imaginaire (milestone 5 — `milestone-5-imaginaire` branch)
+- (none)
 
 ---
 
@@ -148,7 +149,7 @@ Store wiring via `build_stores()`:
 
 - each real store adapter gets its **own** `HttpClient` or `BrowserHttpClient` instance (separate session and rate-limit clock)
 - all clients share the same disk cache directory (`.cache/http`, keyed by URL hash)
-- `--use-browser` applies to Danireon and Silver Goblin only; Face to Face always uses plain `HttpClient`
+- `--use-browser` applies to Danireon and Silver Goblin; Imaginaire always uses browser/TLS transport; Face to Face always uses plain `HttpClient`
 - per-store default max products: Danireon 12, Silver Goblin 12, Face to Face 5
 
 Supported store IDs and aliases:
@@ -165,7 +166,7 @@ Shared HTTP infrastructure:
 - request delay (`min_seconds_between_requests`)
 - disk caching (GET and POST)
 - 429 retry with `Retry-After` or 45s backoff (up to 2 retries)
-- GET text / GET JSON / POST JSON helpers (via shared `requests.Session`)
+- GET text / GET JSON / POST JSON / POST form helpers (via shared `requests.Session`)
 - per-host session warmup (homepage visit before first request)
 - browser navigation headers (`Referer`, `Sec-Fetch-*`)
 - optional cookies file import
@@ -376,6 +377,124 @@ This fallback exists in `facetoface.py` but should not be the normal code path.
 
 ---
 
+# Imaginaire
+
+Imaginaire supports an **HTML batch deck builder** endpoint.
+
+## Primary Path — Deck Builder Batch POST
+
+### Endpoint
+
+```text
+POST https://imaginaire.com/ajax/getDeckBuilder.asp
+```
+
+### Payload Notes
+
+- `Content-Type`: `application/x-www-form-urlencoded`
+- `deckItems`: pipe-separated names, lowercased, prefixed with `$` (example: `$sol ring | $arcane signet`) — **AJAX POST only**
+- **UI textarea** (CDP paste mode): one card per line, lowercase, no `$` (example: `sol ring` newline `arcane signet`)
+- Submit button: `#send2` / **Créer mon deck** (`type="button"`, calls `formatItems()`)
+- `condition`: `NM`
+
+### Response Notes
+
+- Response is `text/html`
+- Cheapest NM in-stock price per card is read from **`div.magicdecklist`** (deck builder summary row), not the first `div.price-listing` in the full printing list
+- Summary shape: `div.magicdecklist div.listinfo` contains two spans — line text (`1 x Set Name (NM)`) and price (`2.49$`)
+- When the summary condition is not NM (e.g. `(SP)`), the parser falls back to scanning `div.price-listing` tables for the lowest NM in-stock quote
+- The page may include multiple conditions (e.g. SP) and out-of-stock listings; the app still applies the global rule: **only NM + in-stock**, and picks the lowest price among parsed quotes (summary is one quote per card when present and NM)
+
+Implementation: `stores/imaginaire.py` uses `BatchStoreAdapter` preload to make a single POST for the full card list and caches quotes for `search_card()`.
+
+### Cloudflare transport (required)
+
+Plain `requests` and exported `cf_clearance` cookies alone **do not work** — Cloudflare binds clearance to browser TLS fingerprint and JS challenge. Importing `cf_clearance` from Chrome into Playwright causes verification loops.
+
+**Recommended: CDP attach to your Chrome** (safest — reuses your real browser session):
+
+```powershell
+# Close all Chrome windows first, then start with remote debugging:
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir="$env:USERPROFILE\.mtg-chrome-profile"
+```
+
+1. Open `https://imaginaire.com/fr/magic/constructeur-de-deck.html` and solve Cloudflare
+2. Run:
+
+```powershell
+python scripts/probe_imaginaire.py --browser-cdp-url http://127.0.0.1:9222 --browser-only
+mtg-prices imaginaire-test.txt --stores imaginaire --browser-cdp-url http://127.0.0.1:9222
+```
+
+Imaginaire automatically uses `ImaginaireHttpClient` (`infra/imaginaire_http_client.py`):
+
+1. **CDP / headed / manual**: skip curl_cffi; use Playwright (or attach to Chrome)
+2. **UI paste mode** (default for CDP and headed `--browser-only`): pastes one card per line into the textarea, clicks **Créer mon deck** (`#send2`), captures the XHR response
+3. **Headless default**: try `curl_cffi` TLS impersonation first, then Playwright with persistent profile
+4. Stale `cf_clearance` in Playwright profile is detected and cleared when the verify UI is still **visible** (CDP mode never clears cookies in your real Chrome session)
+
+**Install:**
+
+```powershell
+pip install -e ".[browser,cloudflare]"
+python -m playwright install chromium
+```
+
+If `mtg-prices` is not found, use `python -m mtg_price_checker.cli` (Scripts folder may not be on PATH).
+
+**CDP workflow:**
+
+1. Start Chrome with remote debugging (see above)
+2. Open deck builder, solve Cloudflare
+3. Run probe or CLI — CDP does **not** auto-poll Cloudflare (avoids false-positive loops on hidden turnstile widgets)
+4. Either the script auto-proceeds when `#send2` and the deck input are visible, or it asks you to press **Enter in the terminal** (not in Chrome)
+5. Watch for step logs: `CDP attached to:`, `Skipping Cloudflare wait...`, `Pasting deck list...`, `Clicking #send2...`, `Captured deck builder response from DOM`
+6. CDP reads results from the page DOM (`li.card-listing`) after submit — Chrome often evicts XHR response bodies over CDP before Playwright can fetch them; the script waits until all pasted cards appear with populated `div.magicdecklist` summaries before extracting
+
+**Headed fallback (no CDP):**
+
+```powershell
+python scripts/probe_imaginaire.py --browser-headed --browser-only --browser-manual-cf
+```
+
+Press Enter only when the deck builder page is truly visible.
+
+**Reset stuck profile:**
+
+```powershell
+Remove-Item -Recurse -Force .cache\browser\imaginaire
+```
+
+Do **not** pass `--cookies-file` for Playwright/CDP (use profile or CDP session instead). `cf_clearance` and `__cf_bm` are skipped when loading cookie files into Playwright.
+
+**CLI flags:**
+
+- `--browser-cdp-url` — connect to existing Chrome (recommended)
+- `--browser-ui-post` — force UI paste+click path (on by default for CDP / headed browser-only)
+- `--no-browser-ui-post` — force legacy in-page `fetch()` POST (debug only)
+- `--browser-headed` — visible Playwright window
+- `--browser-manual-cf` — press Enter when deck builder is ready
+- `--browser-only` — skip curl_cffi
+- `--browser-profile-dir` — persistent profile path (default: `.cache/browser/imaginaire`)
+
+**Discover UI selectors** (after solving CF in CDP Chrome):
+
+```powershell
+python scripts/discover_imaginaire_ui.py --browser-cdp-url http://127.0.0.1:9222
+```
+
+**Probe script:**
+
+```powershell
+python scripts/probe_imaginaire.py --browser-cdp-url http://127.0.0.1:9222 --browser-only
+python scripts/probe_imaginaire.py --browser-headed --browser-manual-cf --browser-only
+python scripts/probe_imaginaire.py
+```
+
+---
+
 # HTTP Infrastructure
 
 ## Shared HttpClient Features
@@ -385,7 +504,7 @@ Features:
 - request delay between live (uncached) requests
 - disk caching for GET and POST responses
 - 429 retry: up to 2 retries, honoring `Retry-After` header or 45s backoff
-- GET text / GET JSON / POST JSON helpers
+- GET text / GET JSON / POST JSON / POST form helpers
 - per-host session warmup
 - browser navigation headers
 - optional cookies file import
@@ -507,6 +626,13 @@ Entry point: `mtg-prices` (or `python -m mtg_price_checker.cli`).
 | `--no-cache` | off | Disable cache reads/writes |
 | `--cookies-file` | off | Netscape cookie export |
 | `--use-browser` | off | Playwright for Danireon + Silver Goblin |
+| `--browser-headed` | off | Visible Playwright window (Imaginaire CF verify, optional for others) |
+| `--browser-only` | off | Imaginaire: skip curl_cffi, Playwright only |
+| `--browser-manual-cf` | off | Press Enter when deck builder is ready (headed) |
+| `--browser-cdp-url` | off | Connect to Chrome via CDP (e.g. http://127.0.0.1:9222) |
+| `--browser-ui-post` | auto | Imaginaire: paste deck list + click submit (on for CDP/headed) |
+| `--no-browser-ui-post` | off | Imaginaire: force legacy in-page fetch POST |
+| `--browser-profile-dir` | `.cache/browser/imaginaire` | Imaginaire persistent browser profile |
 | `--bulk` | off | Fast mode preset (see below) |
 | `--parallel-stores` | off | Parallel per-card store queries; auto-on with `--bulk` |
 | `--no-parallel-stores` | off | Force sequential even with `--bulk` |
@@ -660,6 +786,30 @@ mtg-prices f2f-test.txt `
   --stores facetoface `
   --output output/f2f-prices.csv `
   --audit output/f2f-audit.csv
+```
+
+## Imaginaire
+
+```powershell
+Set-Content -Path imaginaire-test.txt -Value @(
+  "Sol Ring",
+  "Arcane Signet",
+  "Counterspell"
+) -Encoding utf8
+
+mtg-prices imaginaire-test.txt `
+  --stores imaginaire `
+  --request-delay-seconds 8 `
+  --max-products-per-card 8 `
+  --output output/imaginaire-prices.csv `
+  --audit output/imaginaire-audit.csv
+```
+
+If headless Cloudflare verification fails, use CDP mode or headed manual mode:
+
+```powershell
+python scripts/probe_imaginaire.py --browser-cdp-url http://127.0.0.1:9222 --browser-only
+python scripts/probe_imaginaire.py --browser-headed --browser-manual-cf --browser-only
 ```
 
 ## Multi-store (accurate)
