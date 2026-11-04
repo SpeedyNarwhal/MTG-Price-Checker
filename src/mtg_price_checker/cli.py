@@ -115,7 +115,10 @@ def main() -> None:
     parser.add_argument(
         "--browser-only",
         action="store_true",
-        help=("Skip curl_cffi TLS impersonation for Imaginaire and use Playwright only."),
+        help=(
+            "Deprecated no-op for Imaginaire (Playwright is always used). "
+            "Kept for compatibility; with --browser-headed also enables UI paste mode."
+        ),
     )
 
     parser.add_argument(

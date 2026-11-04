@@ -428,17 +428,17 @@ python scripts/probe_imaginaire.py --browser-cdp-url http://127.0.0.1:9222 --bro
 mtg-prices imaginaire-test.txt --stores imaginaire --browser-cdp-url http://127.0.0.1:9222
 ```
 
-Imaginaire automatically uses `ImaginaireHttpClient` (`infra/imaginaire_http_client.py`):
+Imaginaire always uses `ImaginaireHttpClient` → Playwright (`infra/imaginaire_http_client.py`). There is no `curl_cffi` / TLS-impersonation attempt (it consistently 403s).
 
-1. **CDP / headed / manual**: skip curl_cffi; use Playwright (or attach to Chrome)
-2. **UI paste mode** (default for CDP and headed `--browser-only`): pastes one card per line into the textarea, clicks **Créer mon deck** (`#send2`), captures the XHR response
-3. **Headless default**: try `curl_cffi` TLS impersonation first, then Playwright with persistent profile
+1. **CDP (recommended)** or headed Playwright: attach to Chrome / open a browser window
+2. **UI paste mode** (default for CDP and headed): pastes one card per line into the textarea, clicks **Créer mon deck** (`#send2`), captures results from the DOM
+3. **Headless**: Playwright with persistent profile (still browser-only; expect CF friction without CDP)
 4. Stale `cf_clearance` in Playwright profile is detected and cleared when the verify UI is still **visible** (CDP mode never clears cookies in your real Chrome session)
 
 **Install:**
 
 ```powershell
-pip install -e ".[browser,cloudflare]"
+pip install -e ".[browser]"
 python -m playwright install chromium
 ```
 
@@ -472,11 +472,11 @@ Do **not** pass `--cookies-file` for Playwright/CDP (use profile or CDP session 
 **CLI flags:**
 
 - `--browser-cdp-url` — connect to existing Chrome (recommended)
-- `--browser-ui-post` — force UI paste+click path (on by default for CDP / headed browser-only)
+- `--browser-ui-post` — force UI paste+click path (on by default for CDP / headed)
 - `--no-browser-ui-post` — force legacy in-page `fetch()` POST (debug only)
 - `--browser-headed` — visible Playwright window
 - `--browser-manual-cf` — press Enter when deck builder is ready
-- `--browser-only` — skip curl_cffi
+- `--browser-only` — deprecated no-op (Imaginaire is always Playwright); with headed, enables UI paste
 - `--browser-profile-dir` — persistent profile path (default: `.cache/browser/imaginaire`)
 
 **Discover UI selectors** (after solving CF in CDP Chrome):
@@ -627,7 +627,7 @@ Entry point: `mtg-prices` (or `python -m mtg_price_checker.cli`).
 | `--cookies-file` | off | Netscape cookie export |
 | `--use-browser` | off | Playwright for Danireon + Silver Goblin |
 | `--browser-headed` | off | Visible Playwright window (Imaginaire CF verify, optional for others) |
-| `--browser-only` | off | Imaginaire: skip curl_cffi, Playwright only |
+| `--browser-only` | off | Deprecated for Imaginaire (always Playwright); headed+this enables UI paste |
 | `--browser-manual-cf` | off | Press Enter when deck builder is ready (headed) |
 | `--browser-cdp-url` | off | Connect to Chrome via CDP (e.g. http://127.0.0.1:9222) |
 | `--browser-ui-post` | auto | Imaginaire: paste deck list + click submit (on for CDP/headed) |
@@ -735,7 +735,6 @@ Preferred order of strategies:
 
 Potential future milestones:
 
-- Imaginaire adapter (milestone 5 — in progress)
 - async request pipeline
 - better fuzzy card matching
 - Scryfall metadata integration
@@ -748,19 +747,19 @@ Potential future milestones:
 
 # Known Current Situation
 
-Milestones 1–4 are merged to `main`:
+Milestones 1–4 are on `main`; milestone 5 (Imaginaire) lives on `milestone-5-imaginaire`:
 
 - Danireon, Silver Goblin, Face to Face adapters
+- Imaginaire batch deck-builder adapter (Playwright / CDP; no curl_cffi)
 - reliability infrastructure (headers, cache, circuit breaker, cookies, Playwright fallback)
 - bulk mode with parallel store queries and per-store HttpClient instances
 
-All three live stores are working with JSON-first strategies:
+Live store strategies:
 
 - **Face to Face**: stable, fastest adapter, single batch Deck Builder POST
 - **Danireon**: JSON suggest search + product `.js` parsing
 - **Silver Goblin**: JSON suggest search + product `.js` parsing
-
-**Current branch:** `milestone-5-imaginaire` — Imaginaire adapter (not yet implemented).
+- **Imaginaire**: batch HTML deck builder via Playwright CDP/UI paste; NM summary from `div.listinfo`, else price-listing tables
 
 Reliability features in place:
 
@@ -768,6 +767,7 @@ Reliability features in place:
 - request throttling and 24h cache TTL
 - 429 retry within requests; circuit breaker on persistent 403/429
 - optional cookies file and Playwright fallback for Shopify stores
+- Imaginaire Cloudflare via CDP attach to real Chrome (recommended)
 
 ---
 

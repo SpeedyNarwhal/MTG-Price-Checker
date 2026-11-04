@@ -24,6 +24,7 @@ _LISTINFO_LINE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _RARITY_LABELS = frozenset({"uncommon", "common", "rare", "mythic"})
+_ROW_CONDITIONS = frozenset({"NM", "SP", "MP", "HP", "DM"})
 
 
 class ImaginaireStoreAdapter(StoreAdapter, BatchStoreAdapter):
@@ -403,7 +404,7 @@ def _parse_product_block(
         return None
 
     quantity = _extract_quantity(nm_row)
-    price = _extract_price(nm_row.get_text(" ", strip=True))
+    price = _extract_row_price(nm_row)
 
     if quantity <= 0 or price is None:
         return None
@@ -435,7 +436,7 @@ def _block_has_nm_in_stock(product_block) -> bool:
         return False
 
     quantity = _extract_quantity(nm_row)
-    price = _extract_price(nm_row.get_text(" ", strip=True))
+    price = _extract_row_price(nm_row)
     return quantity > 0 and price is not None
 
 
@@ -455,13 +456,29 @@ def _find_nm_row(product_block):
         return None
 
     for tr in product_block.select("tr"):
-        cells = [td.get_text(" ", strip=True) for td in tr.select("td")]
-        if not cells:
-            continue
-        if cells[0].strip().upper() == "NM":
+        if _extract_row_condition(tr) == CardCondition.NEAR_MINT.value:
             return tr
-        if any(cell.strip().upper().startswith("NM") for cell in cells):
-            return tr
+
+    return None
+
+
+def _extract_row_condition(tr) -> str | None:
+    first_td = tr.select_one("td")
+    if first_td is None:
+        return None
+
+    for span in first_td.select("span"):
+        text = span.get_text(" ", strip=True).upper()
+        if text in _ROW_CONDITIONS:
+            return text
+
+    cell_text = first_td.get_text(" ", strip=True).upper()
+    if cell_text in _ROW_CONDITIONS:
+        return cell_text
+
+    token = cell_text.split(None, 1)[0] if cell_text else ""
+    if token in _ROW_CONDITIONS:
+        return token
 
     return None
 
@@ -475,6 +492,26 @@ def _extract_quantity(tr) -> int:
         return int(value)
     except ValueError:
         return 0
+
+
+def _extract_row_price(tr) -> Decimal | None:
+    # Prefer the dedicated price attribute on the qty input (avoids SKU digits like PLGM1NM).
+    price_input = tr.select_one("input[price]")
+    if price_input is not None:
+        attr_price = price_input.get("price")
+        if attr_price:
+            parsed = _extract_price(str(attr_price))
+            if parsed is not None:
+                return parsed
+
+    # Fall back to the Prix column (second <td>).
+    cells = tr.select("td")
+    if len(cells) >= 2:
+        parsed = _extract_price(cells[1].get_text(" ", strip=True))
+        if parsed is not None:
+            return parsed
+
+    return None
 
 
 def _extract_price(text: str) -> Decimal | None:

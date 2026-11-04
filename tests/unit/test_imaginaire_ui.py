@@ -424,19 +424,7 @@ def test_post_deck_builder_via_ui_pastes_and_submits(monkeypatch) -> None:
     assert pasted == ["sol ring\narcane signet"]
 
 
-def test_imaginaire_http_client_skips_tls_when_ui_post_enabled(monkeypatch) -> None:
-    from mtg_price_checker.infra.imaginaire_http_client import ImaginaireHttpClient
-
-    client = ImaginaireHttpClient(
-        HttpClientConfig(
-            browser_cdp_url="http://127.0.0.1:9222",
-            browser_ui_post=True,
-        )
-    )
-    assert client._impersonating is None
-
-
-def test_imaginaire_http_client_uses_browser_when_ui_post_forces_skip_tls(monkeypatch) -> None:
+def test_imaginaire_http_client_uses_browser_for_ui_post(monkeypatch) -> None:
     from mtg_price_checker.infra.imaginaire_http_client import ImaginaireHttpClient
 
     browser = MagicMock()
@@ -446,10 +434,10 @@ def test_imaginaire_http_client_uses_browser_when_ui_post_forces_skip_tls(monkey
     client = ImaginaireHttpClient(
         HttpClientConfig(
             browser_cdp_url="http://127.0.0.1:9222",
+            browser_ui_post=True,
         )
     )
     monkeypatch.setattr(client, "_browser", browser)
-    client._impersonating = MagicMock()
 
     html = client.post_form(
         "https://imaginaire.com/ajax/getDeckBuilder.asp",
@@ -458,4 +446,3 @@ def test_imaginaire_http_client_uses_browser_when_ui_post_forces_skip_tls(monkey
 
     assert "Sol Ring" in html
     browser.post_form.assert_called_once()
-    client._impersonating.post_form.assert_not_called()

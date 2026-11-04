@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock
 
-import requests
-
 from mtg_price_checker.infra.browser_http_client import (
     BrowserHttpClient,
     has_cf_clearance_cookie,
@@ -14,11 +12,7 @@ from mtg_price_checker.infra.browser_http_client import (
     should_skip_browser_cookie,
 )
 from mtg_price_checker.infra.http_client import HttpClientConfig
-from mtg_price_checker.infra.imaginaire_http_client import (
-    ImaginaireHttpClient,
-    _is_http_403,
-    should_skip_tls,
-)
+from mtg_price_checker.infra.imaginaire_http_client import ImaginaireHttpClient
 
 
 class FakeBrowserClient:
@@ -53,74 +47,6 @@ class FakeBrowserClient:
         self.closed = True
 
 
-class FakeImpersonatingClient:
-    def __init__(self, *, fail_with_403: bool = False, html: str = "<html>ok</html>") -> None:
-        self.fail_with_403 = fail_with_403
-        self.html = html
-        self.synced = False
-        self.closed = False
-
-    def post_form(
-        self,
-        url: str,
-        data: dict[str, str],
-        *,
-        referer: str | None = None,
-    ) -> str:
-        del url, data, referer
-        if self.fail_with_403:
-            try:
-                from curl_cffi.requests.exceptions import HTTPError as CurlHTTPError
-            except ImportError:
-                CurlHTTPError = None
-
-            if CurlHTTPError is not None:
-                raise CurlHTTPError("HTTP Error 403: ")
-
-            response = requests.Response()
-            response.status_code = 403
-            response.url = "https://imaginaire.com/ajax/getDeckBuilder.asp"
-            raise requests.HTTPError("403", response=response)
-        return self.html
-
-    def sync_cookies_from_browser(self, browser_client: object) -> None:
-        del browser_client
-        self.synced = True
-
-    def close(self) -> None:
-        self.closed = True
-
-
-def test_should_skip_tls_when_headed() -> None:
-    config = HttpClientConfig(browser_headless=False)
-    assert should_skip_tls(config) is True
-
-
-def test_should_skip_tls_when_browser_only() -> None:
-    config = HttpClientConfig(browser_headless=True, browser_only=True)
-    assert should_skip_tls(config) is True
-
-
-def test_should_skip_tls_when_manual_cf() -> None:
-    config = HttpClientConfig(browser_manual_cf=True)
-    assert should_skip_tls(config) is True
-
-
-def test_should_skip_tls_when_cdp() -> None:
-    config = HttpClientConfig(browser_cdp_url="http://127.0.0.1:9222")
-    assert should_skip_tls(config) is True
-
-
-def test_headed_config_does_not_create_tls_client() -> None:
-    client = ImaginaireHttpClient(HttpClientConfig(browser_headless=False))
-    assert client._impersonating is None
-
-
-def test_cdp_config_does_not_create_tls_client() -> None:
-    client = ImaginaireHttpClient(HttpClientConfig(browser_cdp_url="http://127.0.0.1:9222"))
-    assert client._impersonating is None
-
-
 def test_imaginaire_skips_cloudflare_wait_when_cdp_ready(monkeypatch) -> None:
     browser = FakeBrowserClient(html="<html><li class='card-listing'>Sol Ring</li></html>")
     browser.can_skip = True
@@ -137,37 +63,11 @@ def test_imaginaire_skips_cloudflare_wait_when_cdp_ready(monkeypatch) -> None:
     assert browser.ensure_calls == []
 
 
-def test_imaginaire_http_client_uses_tls_path_when_available(monkeypatch) -> None:
-    browser = FakeBrowserClient(html="should-not-be-used")
-    impersonating = FakeImpersonatingClient(html="<html>Sol Ring</html>")
-
-    client = ImaginaireHttpClient()
-    monkeypatch.setattr(client, "_browser", browser)
-    monkeypatch.setattr(client, "_impersonating", impersonating)
-
-    html = client.post_form(
-        "https://imaginaire.com/ajax/getDeckBuilder.asp",
-        {"deckItems": "$sol ring"},
-        referer="https://imaginaire.com/fr/magic/constructeur-de-deck.html",
-    )
-
-    assert "Sol Ring" in html
-    assert browser.ensure_calls == []
-    assert browser.post_form_calls == []
-    assert impersonating.synced is False
-
-    client.close()
-    assert browser.closed is True
-    assert impersonating.closed is True
-
-
-def test_imaginaire_http_client_falls_back_to_browser_on_403(monkeypatch) -> None:
+def test_imaginaire_http_client_always_uses_browser(monkeypatch) -> None:
     browser = FakeBrowserClient(html="<html>Arcane Signet</html>")
-    impersonating = FakeImpersonatingClient(fail_with_403=True)
 
     client = ImaginaireHttpClient()
     monkeypatch.setattr(client, "_browser", browser)
-    monkeypatch.setattr(client, "_impersonating", impersonating)
 
     html = client.post_form(
         "https://imaginaire.com/ajax/getDeckBuilder.asp",
@@ -178,16 +78,9 @@ def test_imaginaire_http_client_falls_back_to_browser_on_403(monkeypatch) -> Non
     assert "Arcane Signet" in html
     assert browser.ensure_calls == ["https://imaginaire.com/fr/magic/constructeur-de-deck.html"]
     assert len(browser.post_form_calls) == 1
-    assert impersonating.synced is True
 
-
-def test_is_http_403_detects_curl_cffi_style_errors() -> None:
-    try:
-        from curl_cffi.requests.exceptions import HTTPError as CurlHTTPError
-    except ImportError:
-        return
-
-    assert _is_http_403(CurlHTTPError("HTTP Error 403: "))
+    client.close()
+    assert browser.closed is True
 
 
 def test_cloudflare_challenge_visible_in_html() -> None:

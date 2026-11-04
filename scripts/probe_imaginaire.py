@@ -42,7 +42,7 @@ def main() -> None:
     parser.add_argument(
         "--browser-only",
         action="store_true",
-        help="Use Playwright only (skip curl_cffi TLS impersonation).",
+        help="Deprecated no-op (ImaginaireHttpClient is always Playwright). Kept for CLI compatibility.",
     )
     parser.add_argument(
         "--browser-headed",

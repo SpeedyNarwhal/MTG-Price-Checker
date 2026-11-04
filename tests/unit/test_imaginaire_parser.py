@@ -230,6 +230,109 @@ def test_parse_imaginaire_non_nm_summary_falls_back_to_price_listings() -> None:
     assert parsed.listings_checked_by_card_key["counterspell"] == 3
 
 
+def test_parse_imaginaire_price_ignores_sku_digits_like_plgm1() -> None:
+    """Regression: PLGM1NM used to yield $1.00 via first-digit price scrape."""
+    html = """
+    <ul>
+      <li class="card-listing">
+        <div class="magic-card">
+          <h3 class="magictitle">Counterspell</h3>
+          <div class="magicdecklist" position="1" id="list1">
+            <div>
+              <img src="/docs/tempest.jpg">
+              <div class="listinfo">
+                <span>1 x Tempest (SP)</span>
+                <span>4.49$</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="price-listing">
+          <a href="/fr/magic/tempest/counterspell.html?magicsku=TMP57">
+            <img src="/docs/tempest.jpg">
+          </a>
+          <span style="display: block;">Tempest</span>
+          <span style="color: #3333339c; display: block;">common</span>
+          <span style="color: #3333339c; display: block;">TMP57</span>
+          <table>
+            <tr>
+              <td style="background-color: lightgreen;">
+                <span style="color: black; font-size: 16px;">SP</span>
+                <span style="color: #3333339c; font-size: 12px;">TMP57SP</span>
+              </td>
+              <td>4.49 $ </td>
+              <td>
+                <input type="number" price="4.491" value="1" min="1">
+                <span class="quantity">1 </span>
+              </td>
+            </tr>
+          </table>
+        </div>
+        <div class="price-listing">
+          <a href="/fr/magic/final-fantasy-through-the-ages/counterspell-foil.html?magicsku=FCA4F">
+            <img class="foilcard" src="/docs/ff.jpg">
+          </a>
+          <span style="display: block;">Final Fantasy: Through the Ages</span>
+          <span style="color: #3333339c; display: block;">uncommon</span>
+          <span style="color: #3333339c; display: block;">FCA4F</span>
+          <table>
+            <tr>
+              <td style="background-color: lightgreen;">
+                <span style="color: black; font-size: 16px;">NM</span>
+                <span style="color: #3333339c; font-size: 12px;">FCA4FNM</span>
+              </td>
+              <td>8.99 $ </td>
+              <td>
+                <input type="number" price="8.99" value="0" min="1">
+                <span class="quantity">1 </span>
+              </td>
+            </tr>
+          </table>
+        </div>
+        <div class="price-listing">
+          <a href="/fr/magic/dci-legend-membership/counterspell.html?magicsku=PLGM1">
+            <img src="/docs/plgm.jpg">
+          </a>
+          <span style="display: block;">DCI Legend Membership</span>
+          <span style="color: #3333339c; display: block;">rare</span>
+          <span style="color: #3333339c; display: block;">PLGM1</span>
+          <table>
+            <tr>
+              <td style="background-color: lightgreen;">
+                <span style="color: black; font-size: 16px;">NM</span>
+                <span style="color: #3333339c; font-size: 12px;">PLGM1NM</span>
+              </td>
+              <td>69.99 $ </td>
+              <td>
+                <input type="number" price="69.99" value="0" min="1">
+                <span class="quantity">2 </span>
+              </td>
+            </tr>
+          </table>
+        </div>
+      </li>
+    </ul>
+    """
+
+    requested = [RequestedCard(input_name="Counterspell", normalized_name="counterspell")]
+    parsed = parse_imaginaire_deck_builder_html(
+        html=html,
+        requested_cards=requested,
+        max_products_to_check=10,
+    )
+
+    quotes = parsed.quotes_by_card_key["counterspell"]
+    assert len(quotes) == 2
+    prices = {quote.price_cad for quote in quotes}
+    assert Decimal("1.00") not in prices
+    assert Decimal("1") not in prices
+    assert prices == {Decimal("8.99"), Decimal("69.99")}
+    assert min(prices) == Decimal("8.99")
+    cheapest = min(quotes, key=lambda q: q.price_cad)
+    assert cheapest.set_code == "FCA4F"
+    assert cheapest.quantity_available == 1
+
+
 def test_parse_imaginaire_falls_back_to_price_listings_without_magicdecklist() -> None:
     html = """
     <ul>
