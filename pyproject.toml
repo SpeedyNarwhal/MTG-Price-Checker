@@ -16,6 +16,9 @@ dev = [
 browser = [
     "playwright>=1.40.0",
 ]
+cloudflare = [
+    "curl-cffi>=0.7.0",
+]
 
 [project.scripts]
 mtg-prices = "mtg_price_checker.cli:main"

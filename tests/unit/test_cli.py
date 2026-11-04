@@ -15,6 +15,13 @@ def _args(**overrides: object) -> argparse.Namespace:
         "no_cache": False,
         "cookies_file": None,
         "use_browser": False,
+        "browser_headed": False,
+        "browser_only": False,
+        "browser_manual_cf": False,
+        "browser_cdp_url": None,
+        "browser_ui_post": False,
+        "no_browser_ui_post": False,
+        "browser_profile_dir": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -75,3 +82,9 @@ def test_build_cli_run_options_passes_cookies_file() -> None:
     store_options, _, _ = build_cli_run_options(_args(cookies_file=cookies_file), card_count=1)
 
     assert store_options.cookies_file == cookies_file
+
+
+def test_build_cli_run_options_browser_headed() -> None:
+    store_options, _, _ = build_cli_run_options(_args(browser_headed=True), card_count=1)
+
+    assert store_options.browser_headless is False
