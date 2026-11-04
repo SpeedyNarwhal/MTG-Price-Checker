@@ -42,6 +42,8 @@ _CF_STABLE_POLL_SECONDS = 0.5
 _DOM_RESULTS_POLL_SECONDS = 0.25
 _DOM_RESULTS_READY_POLLS = 2
 _DOM_RESULTS_STABLE_POLLS = 4
+# Longer plateau before accepting fewer listings than pasted (site may omit unknown cards).
+_DOM_RESULTS_PARTIAL_STABLE_POLLS = 12
 
 
 def should_use_browser_ui_post(
@@ -257,8 +259,27 @@ def wait_for_deck_builder_results_html(
                                     return html
                         else:
                             ready_polls = 0
+                        stable_polls = 0
+                    elif count == last_count and count > 0:
+                        html = extract_deck_builder_results_html(page)
+                        _, summaries_ready = count_ready_magicdecklist_summaries(html)
+                        if summaries_ready >= count and is_successful_deck_builder_response(
+                            html
+                        ):
+                            stable_polls += 1
+                            if stable_polls >= _DOM_RESULTS_PARTIAL_STABLE_POLLS:
+                                print(
+                                    "Captured deck builder response from DOM "
+                                    f"({count}/{expected_listing_count} listing(s); "
+                                    "site omitted some cards)"
+                                )
+                                return html
+                        else:
+                            stable_polls = 0
                     else:
                         ready_polls = 0
+                        stable_polls = 0
+                        last_count = count
                 elif count == last_count:
                     stable_polls += 1
                     if stable_polls >= _DOM_RESULTS_STABLE_POLLS:
@@ -277,16 +298,17 @@ def wait_for_deck_builder_results_html(
 
         time.sleep(_DOM_RESULTS_POLL_SECONDS)
 
-    if (
-        partial_count > 0
-        and expected_listing_count is not None
-        and partial_count < expected_listing_count
-    ):
-        raise RuntimeError(
-            f"Deck builder results incomplete after submit "
-            f"({partial_count}/{expected_listing_count} listing(s)). "
-            "Check the browser tab for errors or an empty deck list."
-        )
+    if partial_count > 0:
+        html = extract_deck_builder_results_html(page)
+        if is_successful_deck_builder_response(html):
+            expected = (
+                str(expected_listing_count) if expected_listing_count is not None else "?"
+            )
+            print(
+                "Captured deck builder response from DOM after timeout "
+                f"({partial_count}/{expected} listing(s))"
+            )
+            return html
 
     raise RuntimeError(
         "Deck builder results did not appear after submit. "

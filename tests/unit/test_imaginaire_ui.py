@@ -334,12 +334,23 @@ def test_wait_for_deck_builder_results_html_waits_for_summaries(monkeypatch) -> 
     assert extract_calls >= 3
 
 
-def test_wait_for_deck_builder_results_html_raises_when_incomplete(monkeypatch) -> None:
+def test_wait_for_deck_builder_results_html_accepts_partial_after_timeout(
+    monkeypatch,
+) -> None:
     page = MagicMock()
     locator = MagicMock()
     locator.count.side_effect = lambda: 1
     page.locator.return_value = locator
 
+    partial_html = '<li class="card-listing"><h3 class="magictitle">Sol Ring</h3></li>'
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.extract_deck_builder_results_html",
+        lambda _page: partial_html,
+    )
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.is_successful_deck_builder_response",
+        lambda _html: True,
+    )
     monkeypatch.setattr("mtg_price_checker.infra.imaginaire_ui.time.sleep", lambda _s: None)
     times = iter([0.0, 0.1, 0.2, 100.0])
 
@@ -348,14 +359,10 @@ def test_wait_for_deck_builder_results_html_raises_when_incomplete(monkeypatch) 
 
     monkeypatch.setattr("mtg_price_checker.infra.imaginaire_ui.time.monotonic", fake_monotonic)
 
-    try:
-        wait_for_deck_builder_results_html(page, timeout_ms=1000, expected_listing_count=3)
-        raised = False
-    except RuntimeError as exc:
-        raised = True
-        assert "incomplete after submit (1/3 listing(s))" in str(exc)
-
-    assert raised
+    html = wait_for_deck_builder_results_html(
+        page, timeout_ms=1000, expected_listing_count=3
+    )
+    assert "Sol Ring" in html
 
 
 def test_post_deck_builder_via_ui_pastes_and_submits(monkeypatch) -> None:
