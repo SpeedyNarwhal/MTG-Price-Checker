@@ -26,6 +26,10 @@ desktop = [
     "pywebview>=5.0",
     "python-multipart>=0.0.9",
 ]
+packaging = [
+    "pyinstaller>=6.0",
+    "mtg-price-checker[desktop,browser]",
+]
 
 [project.scripts]
 mtg-prices = "mtg_price_checker.cli:main"

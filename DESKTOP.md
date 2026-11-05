@@ -12,7 +12,25 @@ python -m playwright install chromium
 
 Imaginaire’s happy path attaches to **system Chrome via CDP**, so Playwright Chromium is mainly a fallback for other browser modes.
 
-## Run
+## One-file executable
+
+```powershell
+.\build-exe.bat
+```
+
+Output: `dist\MTG-Price-Checker.exe` (uses `assets/app.ico`)
+
+Double-click to run. Imaginaire still uses your installed Google Chrome (launched/closed by the app). First launch can be slower while the exe unpacks.
+
+Regenerate the icon:
+
+```powershell
+python scripts/generate_app_icon.py
+```
+
+Requires Node.js on the build machine (frontend build). The finished `.exe` does not need Node.
+
+## Run from source
 
 ```powershell
 .\run-app.bat

@@ -16,8 +16,9 @@ from mtg_price_checker.app.imaginaire_chrome import (
     launch_chrome_for_imaginaire,
 )
 from mtg_price_checker.app.jobs import JobStatus, job_manager
+from mtg_price_checker.paths import frontend_dist_dir
 
-_STATIC_DIR = Path(__file__).resolve().parents[3] / "web" / "frontend" / "dist"
+_STATIC_DIR = frontend_dist_dir()
 
 
 class CreateJobRequest(BaseModel):
