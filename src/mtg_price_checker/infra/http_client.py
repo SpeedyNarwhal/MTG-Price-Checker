@@ -47,6 +47,7 @@ class HttpClientConfig:
         default_factory=lambda: (
             "https://www.danireon.com/",
             "https://silvergoblin.cards/",
+            "https://www.hobbiesville.com/",
             "https://facetofacegames.com/",
             "https://imaginaire.com/",
         )

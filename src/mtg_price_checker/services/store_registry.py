@@ -9,6 +9,7 @@ from mtg_price_checker.stores.base import StoreAdapter
 from mtg_price_checker.stores.danireon import DanireonStoreAdapter
 from mtg_price_checker.stores.facetoface import FaceToFaceStoreAdapter
 from mtg_price_checker.stores.fake import build_demo_stores
+from mtg_price_checker.stores.hobbiesville import HobbiesvilleStoreAdapter
 from mtg_price_checker.stores.imaginaire import ImaginaireStoreAdapter
 from mtg_price_checker.stores.silvergoblin import SilverGoblinStoreAdapter
 
@@ -56,6 +57,13 @@ def build_stores(
         elif normalized_store_id in {"silvergoblin", "silver-goblin", "silver_goblin"}:
             stores.append(
                 SilverGoblinStoreAdapter(
+                    http_client=_build_http_client(options, use_browser=options.use_browser),
+                    max_products_to_check=options.max_products_per_card or 12,
+                )
+            )
+        elif normalized_store_id in {"hobbiesville", "hobbies-ville", "hobbies_ville"}:
+            stores.append(
+                HobbiesvilleStoreAdapter(
                     http_client=_build_http_client(options, use_browser=options.use_browser),
                     max_products_to_check=options.max_products_per_card or 12,
                 )

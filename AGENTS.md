@@ -60,6 +60,7 @@ Implemented:
 
 - Danireon
 - Silver Goblin
+- Hobbiesville
 - Face to Face Games
 - Imaginaire
 - `demo` — offline fake Face to Face + Danireon adapters (Sol Ring / Arcane Signet only; no HTTP)
@@ -79,6 +80,7 @@ src/mtg_price_checker/
 ├── stores/
 │   ├── danireon.py
 │   ├── silvergoblin.py
+│   ├── hobbiesville.py
 │   ├── facetoface.py
 │   ├── shopify_common.py
 │   └── fake.py
@@ -110,6 +112,7 @@ Current adapters:
 
 - `danireon.py`
 - `silvergoblin.py`
+- `hobbiesville.py`
 - `facetoface.py`
 - `shopify_common.py` (shared Shopify JSON helpers)
 - `fake.py` (demo/offline adapters)
@@ -149,13 +152,14 @@ Store wiring via `build_stores()`:
 
 - each real store adapter gets its **own** `HttpClient` or `BrowserHttpClient` instance (separate session and rate-limit clock)
 - all clients share the same disk cache directory (`.cache/http`, keyed by URL hash)
-- `--use-browser` applies to Danireon and Silver Goblin; Imaginaire always uses browser/TLS transport; Face to Face always uses plain `HttpClient`
-- per-store default max products: Danireon 12, Silver Goblin 12, Face to Face 5
+- `--use-browser` applies to Danireon, Silver Goblin, and Hobbiesville; Imaginaire always uses browser/TLS transport; Face to Face always uses plain `HttpClient`
+- per-store default max products: Danireon 12, Silver Goblin 12, Hobbiesville 12, Face to Face 5
 
 Supported store IDs and aliases:
 
 - `danireon`
 - `silvergoblin`, `silver-goblin`, `silver_goblin`
+- `hobbiesville`, `hobbies-ville`, `hobbies_ville`
 - `facetoface`, `face-to-face`, `face_to_face`, `f2f`
 - `demo`
 
@@ -278,6 +282,25 @@ Notes:
 - Uses shared helpers in `shopify_common.py`
 - Default max product detail fetches per card: 12
 - Exact card name match filters wrong-TCG search hits before price comparison
+
+---
+
+# Hobbiesville
+
+Strategy (JSON-first):
+
+1. Search via `/search/suggest.json` plus full HTML search merge (relevance order, no price sort)
+2. Fetch `/products/{handle}.js` for up to N candidate products
+3. Parse variants for condition (`NM` / `LP` / `MP`), price (cents), and availability
+4. No HTML product-page fallback (`.js` is the primary path); HTML search merge is usually empty because product links are JS-embedded
+
+Notes:
+
+- Uses shared helpers in `shopify_common.py` (including abbreviated condition labels)
+- Titles like `Sol Ring (LTC-284)` / `Sol Ring (Borderless) (SOC-427) Foil`
+- Default max product detail fetches per card: 12
+- Exact card name match filters wrong-TCG / toy search hits before price comparison
+- Multi-TCG catalog; no deck builder endpoint
 
 ---
 
@@ -694,7 +717,7 @@ The project uses pytest.
 
 Important tests:
 
-- parser tests per store (`test_danireon_parser.py`, `test_silver_goblin_parser.py`, `test_face_to_face_parser.py`)
+- parser tests per store (`test_danireon_parser.py`, `test_silver_goblin_parser.py`, `test_hobbiesville_parser.py`, `test_face_to_face_parser.py`)
 - Face to Face batch preload tests
 - circuit breaker and parallel vs sequential parity tests (`test_price_checker.py`)
 - quote selection tests
@@ -756,7 +779,7 @@ Potential future milestones:
 
 Milestones 1–4 are on `main`; milestone 5 (Imaginaire) lives on `milestone-5-imaginaire`:
 
-- Danireon, Silver Goblin, Face to Face adapters
+- Danireon, Silver Goblin, Hobbiesville, Face to Face adapters
 - Imaginaire batch deck-builder adapter (Playwright / CDP; no curl_cffi)
 - reliability infrastructure (headers, cache, circuit breaker, cookies, Playwright fallback)
 - bulk mode with parallel store queries and per-store HttpClient instances
@@ -766,6 +789,7 @@ Live store strategies:
 - **Face to Face**: stable, fastest adapter, single batch Deck Builder POST
 - **Danireon**: JSON suggest search + product `.js` parsing
 - **Silver Goblin**: JSON suggest search + product `.js` parsing
+- **Hobbiesville**: JSON suggest search + product `.js` parsing (NM/LP/MP variant options)
 - **Imaginaire**: batch HTML deck builder via Playwright CDP/UI paste; NM summary from `div.listinfo`, else price-listing tables
 
 Reliability features in place:
@@ -793,6 +817,21 @@ mtg-prices f2f-test.txt `
   --stores facetoface `
   --output output/f2f-prices.csv `
   --audit output/f2f-audit.csv
+```
+
+## Hobbiesville
+
+```powershell
+Set-Content -Path hobbiesville-test.txt -Value @(
+  "Sol Ring",
+  "Arcane Signet",
+  "Counterspell"
+) -Encoding utf8
+
+mtg-prices hobbiesville-test.txt `
+  --stores hobbiesville `
+  --output output/hobbiesville-prices.csv `
+  --audit output/hobbiesville-audit.csv
 ```
 
 ## Imaginaire

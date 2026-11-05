@@ -109,6 +109,36 @@ def test_card_names_match_rejects_wrong_tcg_product_with_similar_title() -> None
     assert card_names_match("Sol Ring", "Pokemon Sol Ring Promo") is False
 
 
+def test_parse_shopify_condition_variants_accepts_abbreviated_conditions() -> None:
+    requested_card = RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring")
+    product_json = {
+        "title": "Sol Ring (LTC-284)",
+        "variants": [
+            {"title": "NM", "option1": "NM", "price": 475, "available": True},
+            {"title": "LP", "option1": "LP", "price": 404, "available": False},
+            {"title": "MP", "option1": "MP", "price": 309, "available": False},
+        ],
+    }
+
+    quotes = parse_shopify_condition_variants(
+        product_json,
+        "https://www.hobbiesville.com/products/sol-ring-ltc-284",
+        requested_card,
+        "hobbiesville",
+        extract_card_name_from_title=lambda title: title.split("(", maxsplit=1)[0].strip(),
+    )
+
+    assert len(quotes) == 3
+    assert [quote.condition for quote in quotes] == [
+        CardCondition.NEAR_MINT,
+        CardCondition.LIGHTLY_PLAYED,
+        CardCondition.MODERATELY_PLAYED,
+    ]
+    assert quotes[0].price_cad == Decimal("4.75")
+    assert quotes[0].in_stock is True
+    assert quotes[1].in_stock is False
+
+
 def test_parse_shopify_condition_variants_rejects_wrong_tcg_product() -> None:
     requested_card = RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring")
     product_json = {
