@@ -79,3 +79,4 @@ If Chrome is already running with remote debugging, the app reuses it and does *
 - Server binds to `127.0.0.1` only.
 - One price-check job at a time.
 - Frontend build output is served from `web/frontend/dist`.
+- When a run finishes (success, cancel, or error), Windows shows a toast notification.

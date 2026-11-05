@@ -32,6 +32,7 @@ hiddenimports = [
     "playwright.sync_api",
     "webview",
     "bottle",
+    "winotify",
 ]
 
 for package in ("uvicorn", "fastapi", "starlette", "anyio", "webview"):

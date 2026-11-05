@@ -14,6 +14,7 @@ from mtg_price_checker.app.imaginaire_chrome import (
     default_cdp_url,
     ensure_chrome_for_imaginaire,
 )
+from mtg_price_checker.app.notifications import notify_job_finished
 from mtg_price_checker.app.serialize import serialize_job_results, serialize_progress_event
 from mtg_price_checker.domain.conditions import parse_min_condition_arg
 from mtg_price_checker.domain.progress import ProgressEvent
@@ -248,6 +249,10 @@ class JobManager:
                         "results": payload,
                     },
                 )
+                notify_job_finished(
+                    title="Price check cancelled",
+                    message=job.message,
+                )
             else:
                 job.status = JobStatus.COMPLETED
                 job.message = f"Finished {job.total_cards} cards."
@@ -261,6 +266,10 @@ class JobManager:
                         "results": payload,
                     },
                 )
+                notify_job_finished(
+                    title="Price check complete",
+                    message=job.message,
+                )
         except Exception as exc:
             job.status = JobStatus.ERROR
             job.error = str(exc)
@@ -273,6 +282,10 @@ class JobManager:
                     "message": job.message,
                     "error": job.error,
                 },
+            )
+            notify_job_finished(
+                title="Price check failed",
+                message=job.message,
             )
         finally:
             close_store_http_clients(stores)
