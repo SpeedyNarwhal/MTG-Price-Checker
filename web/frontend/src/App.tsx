@@ -37,7 +37,7 @@ export default function App() {
   const [stores, setStores] = useState<StoreInfo[]>([]);
   const [selectedStores, setSelectedStores] = useState<string[]>(DEFAULT_STORES);
   const [minCondition, setMinCondition] = useState<string>("NM");
-  const [decklist, setDecklist] = useState("Sol Ring\nArcane Signet\nCounterspell\n");
+  const [decklist, setDecklist] = useState("");
   const [cdpUrl, setCdpUrl] = useState("http://127.0.0.1:9222");
   const [cdpReachable, setCdpReachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
