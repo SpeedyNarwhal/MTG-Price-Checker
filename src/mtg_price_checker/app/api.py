@@ -34,7 +34,7 @@ class LaunchChromeRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MTG Price Checker", version="0.1.0")
+    app = FastAPI(title="MTG Price Checker", version="0.1.1")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
