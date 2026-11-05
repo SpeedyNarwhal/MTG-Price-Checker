@@ -9,3 +9,5 @@ build/
 .env
 /output/
 .cache/
+node_modules/
+web/frontend/dist/

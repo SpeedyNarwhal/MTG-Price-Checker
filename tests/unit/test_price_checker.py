@@ -312,6 +312,49 @@ def test_check_prices_parallel_circuit_breaker_is_thread_safe() -> None:
     assert results["Arcane Signet"]["successful"].status == ResultStatus.FOUND
 
 
+def test_check_prices_on_progress_callback() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    events: list[str] = []
+
+    check_prices(
+        requested_cards,
+        [SuccessfulStore()],
+        show_progress=False,
+        on_progress=lambda event: events.append(event.message),
+    )
+
+    assert len(events) == 2
+    assert "Sol Ring" in events[0]
+    assert "Arcane Signet" in events[1]
+
+
+def test_check_prices_should_cancel_stops_between_cards() -> None:
+    requested_cards = [
+        RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),
+        RequestedCard(input_name="Arcane Signet", normalized_name="Arcane Signet"),
+    ]
+    store = SuccessfulStore()
+    calls = {"n": 0}
+
+    def should_cancel() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    results = check_prices(
+        requested_cards,
+        [store],
+        show_progress=False,
+        should_cancel=should_cancel,
+    )
+
+    assert "Sol Ring" in results
+    assert "Arcane Signet" not in results
+    assert store.call_count == 1
+
+
 def test_check_prices_disabled_store_does_not_stop_other_stores() -> None:
     requested_cards = [
         RequestedCard(input_name="Sol Ring", normalized_name="Sol Ring"),

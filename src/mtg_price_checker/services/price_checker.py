@@ -1,5 +1,6 @@
 import sys
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
@@ -8,11 +9,15 @@ import requests
 from mtg_price_checker.domain.conditions import condition_meets_minimum
 from mtg_price_checker.domain.enums import Finish, ResultStatus
 from mtg_price_checker.domain.price_result import PriceResult
+from mtg_price_checker.domain.progress import ProgressEvent
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
 from mtg_price_checker.stores.base import BatchStoreAdapter, StoreAdapter
 
 _PROGRESS_THRESHOLD = 20
+
+ProgressCallback = Callable[[ProgressEvent], None]
+CancelCallback = Callable[[], bool]
 
 
 def choose_lowest_in_stock_quote(
@@ -90,15 +95,28 @@ def check_prices(
     *,
     parallel_stores: bool = False,
     show_progress: bool | None = None,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCallback | None = None,
 ) -> dict[str, dict[str, PriceResult]]:
     results: dict[str, dict[str, PriceResult]] = {}
     preload_errors: dict[str, Exception] = {}
     disabled_store_status_codes: dict[str, int] = {}
     circuit_breaker_lock = threading.Lock()
 
+    progress_callback = on_progress
+    if progress_callback is None:
+        should_show_progress = (
+            len(requested_cards) > _PROGRESS_THRESHOLD if show_progress is None else show_progress
+        )
+        if should_show_progress:
+            progress_callback = _stderr_progress_callback
+
     for store in stores:
         if not isinstance(store, BatchStoreAdapter):
             continue
+
+        if should_cancel is not None and should_cancel():
+            return results
 
         try:
             store.preload_cards(requested_cards)
@@ -109,11 +127,10 @@ def check_prices(
             if status_code is not None:
                 disabled_store_status_codes[store.store_id] = status_code
 
-    should_show_progress = (
-        len(requested_cards) > _PROGRESS_THRESHOLD if show_progress is None else show_progress
-    )
-
     for card_index, card in enumerate(requested_cards, start=1):
+        if should_cancel is not None and should_cancel():
+            return results
+
         if parallel_stores and len(stores) > 1:
             card_results = _check_card_parallel(
                 card=card,
@@ -132,8 +149,16 @@ def check_prices(
 
         results[card.normalized_name] = card_results
 
-        if should_show_progress:
-            _print_progress(card_index, len(requested_cards), card, stores, card_results)
+        if progress_callback is not None:
+            progress_callback(
+                _build_progress_event(
+                    card_index=card_index,
+                    total_cards=len(requested_cards),
+                    card=card,
+                    stores=stores,
+                    card_results=card_results,
+                )
+            )
 
     return results
 
@@ -284,21 +309,31 @@ def _set_disabled_status_code(
         disabled_store_status_codes[store_id] = status_code
 
 
-def _print_progress(
+def _build_progress_event(
     card_index: int,
     total_cards: int,
     card: RequestedCard,
     stores: list[StoreAdapter],
     card_results: dict[str, PriceResult],
-) -> None:
-    summaries: list[str] = []
-
-    for store in stores:
-        result = card_results[store.store_id]
-        summaries.append(f"{store.display_name} {result.status.value}")
-
+) -> ProgressEvent:
+    store_statuses = {store.store_id: card_results[store.store_id].status.value for store in stores}
+    summaries = [
+        f"{store.display_name} {card_results[store.store_id].status.value}" for store in stores
+    ]
     summary_text = ", ".join(summaries)
-    print(f"[{card_index}/{total_cards}] {card.normalized_name} — {summary_text}", file=sys.stderr)
+    message = f"[{card_index}/{total_cards}] {card.normalized_name} — {summary_text}"
+
+    return ProgressEvent(
+        card_index=card_index,
+        total_cards=total_cards,
+        card_name=card.normalized_name,
+        message=message,
+        store_statuses=store_statuses,
+    )
+
+
+def _stderr_progress_callback(event: ProgressEvent) -> None:
+    print(event.message, file=sys.stderr)
 
 
 def _finish_matches(preference: Finish, actual: Finish) -> bool:
