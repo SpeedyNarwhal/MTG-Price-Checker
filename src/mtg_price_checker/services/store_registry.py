@@ -12,6 +12,7 @@ from mtg_price_checker.stores.fake import build_demo_stores
 from mtg_price_checker.stores.hobbiesville import HobbiesvilleStoreAdapter
 from mtg_price_checker.stores.imaginaire import ImaginaireStoreAdapter
 from mtg_price_checker.stores.silvergoblin import SilverGoblinStoreAdapter
+from mtg_price_checker.stores.wizardtower import WizardTowerStoreAdapter
 
 _IMAGINAIRE_WARMUP_URL = "https://imaginaire.com/fr/magic/constructeur-de-deck.html"
 _DEFAULT_IMAGINAIRE_PROFILE_DIR = Path(".cache/browser/imaginaire")
@@ -73,6 +74,13 @@ def build_stores(
                 FaceToFaceStoreAdapter(
                     http_client=_build_http_client(options, use_browser=False),
                     max_products_to_check=options.max_products_per_card or 5,
+                )
+            )
+        elif normalized_store_id in {"wizardtower", "wizard-tower", "wizard_tower", "wt"}:
+            stores.append(
+                WizardTowerStoreAdapter(
+                    http_client=_build_http_client(options, use_browser=False),
+                    max_products_to_check=options.max_products_per_card or 100,
                 )
             )
         elif normalized_store_id in {"imaginaire", "imaginaire-en", "imaginaire-fr"}:

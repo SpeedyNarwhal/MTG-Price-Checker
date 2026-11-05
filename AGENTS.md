@@ -62,6 +62,7 @@ Implemented:
 - Silver Goblin
 - Hobbiesville
 - Face to Face Games
+- Wizard Tower
 - Imaginaire
 - `demo` — offline fake Face to Face + Danireon adapters (Sol Ring / Arcane Signet only; no HTTP)
 
@@ -82,6 +83,7 @@ src/mtg_price_checker/
 │   ├── silvergoblin.py
 │   ├── hobbiesville.py
 │   ├── facetoface.py
+│   ├── wizardtower.py
 │   ├── shopify_common.py
 │   └── fake.py
 ├── services/
@@ -114,6 +116,7 @@ Current adapters:
 - `silvergoblin.py`
 - `hobbiesville.py`
 - `facetoface.py`
+- `wizardtower.py`
 - `shopify_common.py` (shared Shopify JSON helpers)
 - `fake.py` (demo/offline adapters)
 
@@ -121,7 +124,7 @@ Current adapters:
 
 Shared orchestration logic:
 
-- batch preload for `BatchStoreAdapter` stores (Face to Face) before the card loop
+- batch preload for `BatchStoreAdapter` stores (Face to Face, Wizard Tower, Imaginaire) before the card loop
 - per-card store queries (sequential or parallel via `ThreadPoolExecutor`)
 - selects lowest valid in-stock quote (respects `finish_preference` and `min_condition`, default NM)
 - handles statuses and audit notes (`Checked N product listings.`)
@@ -152,8 +155,8 @@ Store wiring via `build_stores()`:
 
 - each real store adapter gets its **own** `HttpClient` or `BrowserHttpClient` instance (separate session and rate-limit clock)
 - all clients share the same disk cache directory (`.cache/http`, keyed by URL hash)
-- `--use-browser` applies to Danireon, Silver Goblin, and Hobbiesville; Imaginaire always uses browser/TLS transport; Face to Face always uses plain `HttpClient`
-- per-store default max products: Danireon 12, Silver Goblin 12, Hobbiesville 12, Face to Face 5
+- `--use-browser` applies to Danireon, Silver Goblin, and Hobbiesville; Imaginaire always uses browser/TLS transport; Face to Face and Wizard Tower always use plain `HttpClient`
+- per-store default max products: Danireon 12, Silver Goblin 12, Hobbiesville 12, Face to Face 5, Wizard Tower 100 (lookup returns all products per card)
 
 Supported store IDs and aliases:
 
@@ -161,6 +164,7 @@ Supported store IDs and aliases:
 - `silvergoblin`, `silver-goblin`, `silver_goblin`
 - `hobbiesville`, `hobbies-ville`, `hobbies_ville`
 - `facetoface`, `face-to-face`, `face_to_face`, `f2f`
+- `wizardtower`, `wizard-tower`, `wizard_tower`, `wt`
 - `demo`
 
 ### `infra/http_client.py`
@@ -301,6 +305,58 @@ Notes:
 - Default max product detail fetches per card: 12
 - Exact card name match filters wrong-TCG / toy search hits before price comparison
 - Multi-TCG catalog; no deck builder endpoint
+
+---
+
+# Wizard Tower
+
+IMPORTANT:
+The **primary** path uses the Deck Builder lookup JSON endpoint (no HTML scraping, no browser).
+
+## Primary Path — Deck Builder Batch POST
+
+### Endpoint
+
+```text
+POST https://store.wizardtower.com/apps/deckbuilder/lookup
+```
+
+### Payload Shape
+
+```json
+{
+  "game": "magic",
+  "names": ["Sol Ring", "Arcane Signet"]
+}
+```
+
+### Response Shape
+
+Useful data is under `results[]`:
+
+- `cardName`
+- `match` (`exact` or `none`)
+- `products[]` with `title`, `full_title`, `url`, `card_set`, `collector_number`, `tags`, `variants[]`
+
+Each variant contains:
+
+- `condition_code` (`NM` / `SP` / `MP` / `HP`)
+- `price` (CAD number)
+- `inventory_quantity`
+- `available`
+
+Finish comes from tag `mtg_mtg_finish` (`Regular` → nonfoil; any `*Foil*` → foil). `SP` maps to `LP`.
+
+### Batch Preload Architecture
+
+Wizard Tower supports batch loading via `BatchStoreAdapter`:
+
+- one POST per chunk of up to **100** card names (API max)
+- preload all results into an internal quote cache
+- parse **all** product variants returned for each exact match (no pre-price truncation)
+- `search_card()` reads from preloaded data
+
+No HTML / Shopify `.js` fallback in v1.
 
 ---
 
@@ -779,7 +835,7 @@ Potential future milestones:
 
 Milestones 1–4 are on `main`; milestone 5 (Imaginaire) lives on `milestone-5-imaginaire`:
 
-- Danireon, Silver Goblin, Hobbiesville, Face to Face adapters
+- Danireon, Silver Goblin, Hobbiesville, Face to Face, Wizard Tower adapters
 - Imaginaire batch deck-builder adapter (Playwright / CDP; no curl_cffi)
 - reliability infrastructure (headers, cache, circuit breaker, cookies, Playwright fallback)
 - bulk mode with parallel store queries and per-store HttpClient instances
@@ -787,6 +843,7 @@ Milestones 1–4 are on `main`; milestone 5 (Imaginaire) lives on `milestone-5-i
 Live store strategies:
 
 - **Face to Face**: stable, fastest adapter, single batch Deck Builder POST
+- **Wizard Tower**: batch Deck Builder lookup POST (`game=magic`, chunks of ≤100 names)
 - **Danireon**: JSON suggest search + product `.js` parsing
 - **Silver Goblin**: JSON suggest search + product `.js` parsing
 - **Hobbiesville**: JSON suggest search + product `.js` parsing (NM/LP/MP variant options)
@@ -832,6 +889,21 @@ mtg-prices hobbiesville-test.txt `
   --stores hobbiesville `
   --output output/hobbiesville-prices.csv `
   --audit output/hobbiesville-audit.csv
+```
+
+## Wizard Tower
+
+```powershell
+Set-Content -Path wt-test.txt -Value @(
+  "Sol Ring",
+  "Arcane Signet",
+  "Counterspell"
+) -Encoding utf8
+
+mtg-prices wt-test.txt `
+  --stores wizardtower `
+  --output output/wt-prices.csv `
+  --audit output/wt-audit.csv
 ```
 
 ## Imaginaire
