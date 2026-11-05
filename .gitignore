@@ -11,3 +11,6 @@ build/
 .cache/
 node_modules/
 web/frontend/dist/
+
+# Local decklists, smoke-test inputs, and browser cookie exports
+/*.txt

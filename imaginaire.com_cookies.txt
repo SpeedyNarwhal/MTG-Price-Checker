@@ -1,9 +1,0 @@
-# Netscape HTTP Cookie File
-# https://curl.haxx.se/rfc/cookie_spec.html
-# This is a generated file! Do not edit.
-
-imaginaire.com	FALSE	/	FALSE	1797284698	langd	fr
-imaginaire.com	FALSE	/	FALSE	1797284698	langid	2
-imaginaire.com	FALSE	/	FALSE	1797284698	sessionUserOld	312660292
-imaginaire.com	FALSE	/	TRUE	0	ASPSESSIONIDAWBBQBTS	EEBNCKCBBIKNNDINBMDDKNFB
-.imaginaire.com	TRUE	/	TRUE	1797284695	cf_clearance	qwY8pHmT2kGPTv7uEJqbnmGw8UpLkmS3UP54n70qK8k-1781732695-1.2.1.1-zcPywqHmfazMH5KTPiiZv.XGszgTh.dW4eVqBA2VfwjrB9zXVoN8XrQruSWCNQD4AiMs1iNvi6qHMVA1DtcNhiSS0e2QHJuwpgHIJHq5lE.ugVSWDpwX55xUVrWrpdfiUKbVx94dF0EXDerS.6lYf.rjkNnK3FbZcjiwAAruaddJ77_A8bCiA.n01C7SJOLJD9RqozmAl3XrpvalthFlbz5HLgvuFak8ASmLybcpTvVMoUz7E7JNqEWsGLn3QxDuI_8DYqcv65EQ.EmauoMkjBKI6D3jI7Xr3D1BQtYTzfGfUkknoYqEjcB6x83uKTpGU5BH51lO.C5yndyJvdQRGOFhf88PUGYvYPm4JAEtKRJjZIPp93WBkhcknMfx3cJeVUhk25.RG9tKLBSdaml0KXhRyHREEwvndovGrPdEBchT66qv5q0bfrSGM6c5ED69
