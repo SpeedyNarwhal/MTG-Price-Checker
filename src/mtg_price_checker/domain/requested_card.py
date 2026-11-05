@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from mtg_price_checker.domain.enums import Finish
+from mtg_price_checker.domain.enums import CardCondition, Finish
 
 
 @dataclass(frozen=True)
@@ -11,4 +11,5 @@ class RequestedCard:
     set_code: str | None = None
     collector_number: str | None = None
     finish_preference: Finish = Finish.EITHER
+    min_condition: CardCondition = CardCondition.NEAR_MINT
     language: str = "English"

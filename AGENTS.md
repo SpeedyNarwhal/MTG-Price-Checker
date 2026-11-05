@@ -120,7 +120,7 @@ Shared orchestration logic:
 
 - batch preload for `BatchStoreAdapter` stores (Face to Face) before the card loop
 - per-card store queries (sequential or parallel via `ThreadPoolExecutor`)
-- selects lowest valid NM in-stock quote (respects `finish_preference`)
+- selects lowest valid in-stock quote (respects `finish_preference` and `min_condition`, default NM)
 - handles statuses and audit notes (`Checked N product listings.`)
 - store circuit-breaker logic (403/429 disables store for remainder of run)
 - thread-safe circuit breaker when `--parallel-stores` is active
@@ -183,7 +183,7 @@ Playwright-backed HTTP client for Shopify stores when `--use-browser` is set:
 
 Shared domain models:
 
-- `RequestedCard` (includes `finish_preference`, default `EITHER`)
+- `RequestedCard` (includes `finish_preference` default `EITHER`, `min_condition` default `NM`)
 - `StoreQuote`
 - `PriceResult`
 - enums for condition, finish, result status
@@ -196,14 +196,20 @@ Shared domain models:
 
 The app only considers:
 
-- Near Mint (`NM`)
+- condition at least as good as `RequestedCard.min_condition` (default: `NM`)
 - in-stock
 - CAD prices
 - finish matching `RequestedCard.finish_preference` (default: either foil or nonfoil)
 
+Condition ladder (best → worst): `NM` > `LP` > `MP` > `HP` > `DMG`.
+
+Store labels are normalized into that ladder (e.g. Imaginaire `SP` and Face to Face `PL` → `LP`; Danireon “Lightly Played” → `LP`).
+
+CLI: `--min-condition LP` (aliases: `SP`, `PL`, `lightly-played`, …) accepts NM and LP quotes and picks the lowest price among them.
+
 The final selected result per store/card is:
 
-- lowest valid NM in-stock price
+- lowest valid in-stock price meeting condition + finish preferences
 
 ## Product Discovery — No Price-Sorted Search
 
@@ -402,8 +408,8 @@ POST https://imaginaire.com/ajax/getDeckBuilder.asp
 - Response is `text/html`
 - Cheapest NM in-stock price per card is read from **`div.magicdecklist`** (deck builder summary row), not the first `div.price-listing` in the full printing list
 - Summary shape: `div.magicdecklist div.listinfo` contains two spans — line text (`1 x Set Name (NM)`) and price (`2.49$`)
-- When the summary condition is not NM (e.g. `(SP)`), the parser falls back to scanning `div.price-listing` tables for the lowest NM in-stock quote
-- The page may include multiple conditions (e.g. SP) and out-of-stock listings; the app still applies the global rule: **only NM + in-stock**, and picks the lowest price among parsed quotes (summary is one quote per card when present and NM)
+- When the summary condition is worse than `--min-condition` (e.g. `(SP)` with default NM), the parser falls back to scanning `div.price-listing` tables
+- Listing rows emit all in-stock conditions; shared selection keeps quotes at/above `min_condition` (Imaginaire `SP` maps to `LP`)
 
 Implementation: `stores/imaginaire.py` uses `BatchStoreAdapter` preload to make a single POST for the full card list and caches quotes for `search_card()`.
 
@@ -618,6 +624,7 @@ Entry point: `mtg-prices` (or `python -m mtg_price_checker.cli`).
 |------|---------|-------|
 | `input_file` | (required) | Deck list text file |
 | `--stores` | `danireon` | Space-separated store IDs |
+| `--min-condition` | `NM` | Worst accepted condition (`NM`, `LP`/`SP`/`PL`, `MP`, `HP`, `DMG`) |
 | `--output` / `-o` | `output/prices.csv` | Price matrix CSV |
 | `--audit` | off | Optional audit CSV path |
 | `--max-products-per-card` | per-store defaults | Bulk sets 8 unless overridden |

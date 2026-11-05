@@ -1,6 +1,9 @@
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
+from mtg_price_checker.domain.conditions import parse_min_condition_arg
+from mtg_price_checker.domain.enums import CardCondition
 from mtg_price_checker.input.decklist_parser import parse_card_file
 from mtg_price_checker.output.csv_writer import write_audit_csv, write_price_matrix_csv
 from mtg_price_checker.services.price_checker import check_prices
@@ -165,6 +168,16 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--min-condition",
+        type=_min_condition_arg,
+        default=CardCondition.NEAR_MINT,
+        help=(
+            "Worst card condition to accept (best→worst: NM, LP/SP/PL, MP, HP, DMG). "
+            "Default: NM. Store labels are normalized (e.g. Imaginaire SP and F2F PL → LP)."
+        ),
+    )
+
+    parser.add_argument(
         "--bulk",
         action="store_true",
         help=(
@@ -187,7 +200,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    requested_cards = parse_card_file(args.input_file)
+    requested_cards = [
+        replace(card, min_condition=args.min_condition) for card in parse_card_file(args.input_file)
+    ]
     store_options, parallel_stores, show_progress = build_cli_run_options(
         args, len(requested_cards)
     )
@@ -283,6 +298,13 @@ def _non_negative_float(value: str) -> float:
         raise argparse.ArgumentTypeError("Value must be zero or greater.")
 
     return parsed
+
+
+def _min_condition_arg(value: str) -> CardCondition:
+    try:
+        return parse_min_condition_arg(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 if __name__ == "__main__":

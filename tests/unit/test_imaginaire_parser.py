@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from mtg_price_checker.domain.enums import CardCondition
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.stores.imaginaire import (
     deck_items_api_to_ui,
@@ -174,6 +175,67 @@ def test_parse_imaginaire_magicdecklist_sol_ring_summary() -> None:
     assert quotes[0].price_cad == Decimal("2.49")
     assert quotes[0].set_code == "M3C305"
     assert quotes[0].set_name == "Modern Horizons 3 Commander"
+
+
+def test_parse_imaginaire_sp_summary_used_when_min_condition_allows() -> None:
+    html = """
+    <ul>
+      <li class="card-listing">
+        <div class="magic-card">
+          <h3 class="magictitle">Counterspell</h3>
+          <div class="magicdecklist">
+            <div>
+              <img src="/docs/tempest.jpg">
+              <div class="listinfo">
+                <span>1 x Tempest (SP)</span>
+                <span>4.49$</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="price-listing">
+          <a href="/fr/magic/tempest/counterspell.html?magicsku=TMP57">
+            <img src="/docs/tempest.jpg">
+          </a>
+          <span>Tempest</span>
+          <table>
+            <tr>
+              <td><span>SP</span><span>TMP57SP</span></td>
+              <td>4.49 $</td>
+              <td><input price="4.49"><span class="quantity">1</span></td>
+            </tr>
+          </table>
+        </div>
+        <div class="price-listing">
+          <a href="/fr/magic/ff/counterspell-foil.html?magicsku=FCA4F">Foil</a>
+          <span>Final Fantasy: Through the Ages</span>
+          <table>
+            <tr>
+              <td><span>NM</span><span>FCA4FNM</span></td>
+              <td>8.99 $</td>
+              <td><input price="8.99"><span class="quantity">1</span></td>
+            </tr>
+          </table>
+        </div>
+      </li>
+    </ul>
+    """
+    requested = [
+        RequestedCard(
+            input_name="Counterspell",
+            normalized_name="counterspell",
+            min_condition=CardCondition.LIGHTLY_PLAYED,
+        )
+    ]
+    parsed = parse_imaginaire_deck_builder_html(
+        html=html,
+        requested_cards=requested,
+        max_products_to_check=10,
+    )
+    quotes = parsed.quotes_by_card_key["counterspell"]
+    assert len(quotes) == 1
+    assert quotes[0].price_cad == Decimal("4.49")
+    assert quotes[0].condition == CardCondition.LIGHTLY_PLAYED
 
 
 def test_parse_imaginaire_non_nm_summary_falls_back_to_price_listings() -> None:

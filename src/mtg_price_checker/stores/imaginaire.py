@@ -8,6 +8,10 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from mtg_price_checker.domain.conditions import (
+    condition_meets_minimum,
+    parse_condition_label,
+)
 from mtg_price_checker.domain.enums import CardCondition, Finish
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
@@ -161,11 +165,13 @@ def parse_imaginaire_deck_builder_html(
         listings_checked_by_key[matched_key] = min(len(product_blocks), max_products_to_check)
 
         for product_block in product_blocks[:max_products_to_check]:
-            quote = _parse_product_block(
-                product_block, requested_card=requested_card, matched_card_name=card_name
+            quotes_by_key[matched_key].extend(
+                _parse_product_block_quotes(
+                    product_block,
+                    requested_card=requested_card,
+                    matched_card_name=card_name,
+                )
             )
-            if quote is not None:
-                quotes_by_key[matched_key].append(quote)
 
     return ParsedImaginaireDeckBuilder(
         quotes_by_card_key=quotes_by_key,
@@ -187,8 +193,9 @@ def magicdecklist_has_nm_in_stock(card_listing) -> bool:
     parsed = _parse_listinfo(summary_block)
     if parsed is None:
         return False
-    quantity, _set_name, condition, price = parsed
-    return condition.upper() == CardCondition.NEAR_MINT.value and quantity > 0 and price is not None
+    quantity, _set_name, condition_label, price = parsed
+    condition = parse_condition_label(condition_label)
+    return condition == CardCondition.NEAR_MINT and quantity > 0 and price is not None
 
 
 def _format_deck_items(card_names: Iterable[str]) -> str:
@@ -273,8 +280,11 @@ def _parse_magicdecklist_summary(
     if parsed is None:
         return None
 
-    quantity, set_name, condition, price = parsed
-    if condition.upper() != CardCondition.NEAR_MINT.value:
+    quantity, set_name, condition_label, price = parsed
+    condition = parse_condition_label(condition_label)
+    if condition is None:
+        return None
+    if not condition_meets_minimum(condition, requested_card.min_condition):
         return None
 
     summary_img = summary_block.select_one("img[src]")
@@ -290,7 +300,7 @@ def _parse_magicdecklist_summary(
         store_id="imaginaire",
         requested_card_name=requested_card.normalized_name,
         matched_card_name=matched_card_name,
-        condition=CardCondition.NEAR_MINT,
+        condition=condition,
         finish=finish,
         price_cad=price,
         in_stock=True,
@@ -385,59 +395,56 @@ def _price_listing_matches_image(product_block, summary_img_key: str) -> bool:
     )
 
 
-def _parse_product_block(
+def _parse_product_block_quotes(
     product_block,
     *,
     requested_card: RequestedCard,
     matched_card_name: str,
-) -> StoreQuote | None:
-    if not _block_has_nm_in_stock(product_block):
-        return None
+) -> list[StoreQuote]:
+    text = product_block.get_text(" ", strip=True).lower()
+    if "rupture de stock" in text:
+        return []
 
     product_url = _extract_product_url(product_block)
     set_name = _extract_set_name(product_block)
     set_code = _extract_set_code(product_url)
     finish = Finish.FOIL if product_block.select_one("img.foilcard") else Finish.NONFOIL
 
-    nm_row = _find_nm_row(product_block)
-    if nm_row is None:
-        return None
+    quotes: list[StoreQuote] = []
+    for tr in product_block.select("tr"):
+        condition_label = _extract_row_condition(tr)
+        if condition_label is None:
+            continue
+        condition = parse_condition_label(condition_label)
+        if condition is None:
+            continue
+        if not condition_meets_minimum(condition, requested_card.min_condition):
+            continue
 
-    quantity = _extract_quantity(nm_row)
-    price = _extract_row_price(nm_row)
+        quantity = _extract_quantity(tr)
+        price = _extract_row_price(tr)
+        if quantity <= 0 or price is None:
+            continue
 
-    if quantity <= 0 or price is None:
-        return None
+        quotes.append(
+            StoreQuote(
+                store_id="imaginaire",
+                requested_card_name=requested_card.normalized_name,
+                matched_card_name=matched_card_name,
+                condition=condition,
+                finish=finish,
+                price_cad=price,
+                in_stock=True,
+                product_url=product_url,
+                quantity_available=quantity,
+                set_name=set_name,
+                set_code=set_code,
+                raw_title=matched_card_name,
+                confidence_score=1.0,
+            )
+        )
 
-    return StoreQuote(
-        store_id="imaginaire",
-        requested_card_name=requested_card.normalized_name,
-        matched_card_name=matched_card_name,
-        condition=CardCondition.NEAR_MINT,
-        finish=finish,
-        price_cad=price,
-        in_stock=True,
-        product_url=product_url,
-        quantity_available=quantity,
-        set_name=set_name,
-        set_code=set_code,
-        raw_title=matched_card_name,
-        confidence_score=1.0,
-    )
-
-
-def _block_has_nm_in_stock(product_block) -> bool:
-    text = product_block.get_text(" ", strip=True).lower()
-    if "rupture de stock" in text:
-        return False
-
-    nm_row = _find_nm_row(product_block)
-    if nm_row is None:
-        return False
-
-    quantity = _extract_quantity(nm_row)
-    price = _extract_row_price(nm_row)
-    return quantity > 0 and price is not None
+    return quotes
 
 
 def _extract_card_listing_name(card_listing) -> str | None:
@@ -448,18 +455,6 @@ def _extract_card_listing_name(card_listing) -> str | None:
         return None
     value = header.get_text(" ", strip=True)
     return value or None
-
-
-def _find_nm_row(product_block):
-    text = product_block.get_text(" ", strip=True).lower()
-    if "rupture de stock" in text:
-        return None
-
-    for tr in product_block.select("tr"):
-        if _extract_row_condition(tr) == CardCondition.NEAR_MINT.value:
-            return tr
-
-    return None
 
 
 def _extract_row_condition(tr) -> str | None:

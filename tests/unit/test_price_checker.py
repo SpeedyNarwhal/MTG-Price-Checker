@@ -119,6 +119,51 @@ def test_choose_lowest_nm_in_stock_quote() -> None:
     assert best_quote.price_cad == Decimal("1.50")
 
 
+def test_choose_lowest_in_stock_quote_respects_min_condition() -> None:
+    from mtg_price_checker.services.price_checker import choose_lowest_in_stock_quote
+
+    requested_card = RequestedCard(
+        input_name="Sol Ring",
+        normalized_name="Sol Ring",
+        min_condition=CardCondition.LIGHTLY_PLAYED,
+    )
+    quotes = [
+        StoreQuote(
+            store_id="test",
+            requested_card_name="Sol Ring",
+            matched_card_name="Sol Ring",
+            condition=CardCondition.NEAR_MINT,
+            finish=Finish.NONFOIL,
+            price_cad=Decimal("2.00"),
+            in_stock=True,
+        ),
+        StoreQuote(
+            store_id="test",
+            requested_card_name="Sol Ring",
+            matched_card_name="Sol Ring",
+            condition=CardCondition.LIGHTLY_PLAYED,
+            finish=Finish.NONFOIL,
+            price_cad=Decimal("1.00"),
+            in_stock=True,
+        ),
+        StoreQuote(
+            store_id="test",
+            requested_card_name="Sol Ring",
+            matched_card_name="Sol Ring",
+            condition=CardCondition.MODERATELY_PLAYED,
+            finish=Finish.NONFOIL,
+            price_cad=Decimal("0.50"),
+            in_stock=True,
+        ),
+    ]
+
+    best_quote = choose_lowest_in_stock_quote(requested_card, quotes)
+
+    assert best_quote is not None
+    assert best_quote.price_cad == Decimal("1.00")
+    assert best_quote.condition == CardCondition.LIGHTLY_PLAYED
+
+
 def test_build_price_result_returns_not_found_when_no_quotes() -> None:
     requested_card = RequestedCard(input_name="Missing Card", normalized_name="Missing Card")
 

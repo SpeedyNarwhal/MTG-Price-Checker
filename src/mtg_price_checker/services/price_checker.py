@@ -5,7 +5,8 @@ from decimal import Decimal
 
 import requests
 
-from mtg_price_checker.domain.enums import CardCondition, Finish, ResultStatus
+from mtg_price_checker.domain.conditions import condition_meets_minimum
+from mtg_price_checker.domain.enums import Finish, ResultStatus
 from mtg_price_checker.domain.price_result import PriceResult
 from mtg_price_checker.domain.requested_card import RequestedCard
 from mtg_price_checker.domain.store_quote import StoreQuote
@@ -14,7 +15,7 @@ from mtg_price_checker.stores.base import BatchStoreAdapter, StoreAdapter
 _PROGRESS_THRESHOLD = 20
 
 
-def choose_lowest_nm_in_stock_quote(
+def choose_lowest_in_stock_quote(
     requested_card: RequestedCard,
     quotes: list[StoreQuote],
 ) -> StoreQuote | None:
@@ -23,7 +24,7 @@ def choose_lowest_nm_in_stock_quote(
         for quote in quotes
         if quote.in_stock
         and quote.price_cad is not None
-        and quote.condition == CardCondition.NEAR_MINT
+        and condition_meets_minimum(quote.condition, requested_card.min_condition)
         and _finish_matches(requested_card.finish_preference, quote.finish)
     ]
 
@@ -31,6 +32,14 @@ def choose_lowest_nm_in_stock_quote(
         return None
 
     return min(valid_quotes, key=_required_price)
+
+
+def choose_lowest_nm_in_stock_quote(
+    requested_card: RequestedCard,
+    quotes: list[StoreQuote],
+) -> StoreQuote | None:
+    """Backward-compatible alias for choose_lowest_in_stock_quote."""
+    return choose_lowest_in_stock_quote(requested_card, quotes)
 
 
 def build_price_result(
@@ -48,14 +57,17 @@ def build_price_result(
             notes="No matching listing found.",
         )
 
-    best_quote = choose_lowest_nm_in_stock_quote(requested_card, quotes)
+    best_quote = choose_lowest_in_stock_quote(requested_card, quotes)
 
     if best_quote is None:
         return PriceResult(
             requested_card=requested_card,
             store_id=store_id,
             status=ResultStatus.OUT_OF_STOCK,
-            notes="Listings found, but no NM in-stock copy matched preferences.",
+            notes=(
+                "Listings found, but no in-stock copy matched condition/finish preferences "
+                f"(min condition {requested_card.min_condition.value})."
+            ),
         )
 
     notes = None
