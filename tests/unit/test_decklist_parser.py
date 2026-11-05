@@ -1,4 +1,11 @@
-from mtg_price_checker.input.decklist_parser import parse_card_line
+from mtg_price_checker.input.decklist_parser import parse_card_line, parse_decklist_text
+
+
+def test_parse_decklist_text() -> None:
+    cards = parse_decklist_text("2 Sol Ring\n# skip\nArcane Signet\n")
+
+    assert [card.normalized_name for card in cards] == ["Sol Ring", "Arcane Signet"]
+    assert cards[0].quantity == 2
 
 
 def test_parse_card_line_with_quantity() -> None:

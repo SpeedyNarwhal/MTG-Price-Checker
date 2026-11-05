@@ -263,9 +263,7 @@ def wait_for_deck_builder_results_html(
                     elif count == last_count and count > 0:
                         html = extract_deck_builder_results_html(page)
                         _, summaries_ready = count_ready_magicdecklist_summaries(html)
-                        if summaries_ready >= count and is_successful_deck_builder_response(
-                            html
-                        ):
+                        if summaries_ready >= count and is_successful_deck_builder_response(html):
                             stable_polls += 1
                             if stable_polls >= _DOM_RESULTS_PARTIAL_STABLE_POLLS:
                                 print(
@@ -285,9 +283,7 @@ def wait_for_deck_builder_results_html(
                     if stable_polls >= _DOM_RESULTS_STABLE_POLLS:
                         html = extract_deck_builder_results_html(page)
                         if is_successful_deck_builder_response(html):
-                            print(
-                                f"Captured deck builder response from DOM ({count} listing(s))"
-                            )
+                            print(f"Captured deck builder response from DOM ({count} listing(s))")
                             return html
                 else:
                     stable_polls = 0
@@ -301,9 +297,7 @@ def wait_for_deck_builder_results_html(
     if partial_count > 0:
         html = extract_deck_builder_results_html(page)
         if is_successful_deck_builder_response(html):
-            expected = (
-                str(expected_listing_count) if expected_listing_count is not None else "?"
-            )
+            expected = str(expected_listing_count) if expected_listing_count is not None else "?"
             print(
                 "Captured deck builder response from DOM after timeout "
                 f"({partial_count}/{expected} listing(s))"

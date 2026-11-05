@@ -19,6 +19,11 @@ _CONDITION_LABELS = {
     "Moderately Played": CardCondition.MODERATELY_PLAYED,
     "Heavily Played": CardCondition.HEAVILY_PLAYED,
     "Damaged": CardCondition.DAMAGED,
+    "NM": CardCondition.NEAR_MINT,
+    "LP": CardCondition.LIGHTLY_PLAYED,
+    "MP": CardCondition.MODERATELY_PLAYED,
+    "HP": CardCondition.HEAVILY_PLAYED,
+    "DMG": CardCondition.DAMAGED,
 }
 
 

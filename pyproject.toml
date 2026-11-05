@@ -1,7 +1,7 @@
 [project]
 name = "mtg-price-checker"
 version = "0.1.0"
-description = "Terminal-based Magic: The Gathering card price checker."
+description = "Magic: The Gathering card price checker (CLI + desktop app)."
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.12.0",
@@ -12,6 +12,7 @@ dependencies = [
 dev = [
     "pytest",
     "ruff",
+    "httpx",
 ]
 browser = [
     "playwright>=1.40.0",
@@ -19,9 +20,21 @@ browser = [
 cloudflare = [
     "curl-cffi>=0.7.0",
 ]
+desktop = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pywebview>=5.0",
+    "python-multipart>=0.0.9",
+]
+packaging = [
+    "pyinstaller>=6.0",
+    "mtg-price-checker[desktop,browser]",
+]
 
 [project.scripts]
 mtg-prices = "mtg_price_checker.cli:main"
+mtg-prices-app = "mtg_price_checker.desktop.launcher:main"
+mtg-prices-server = "mtg_price_checker.app.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

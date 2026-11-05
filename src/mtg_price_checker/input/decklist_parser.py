@@ -34,10 +34,8 @@ def parse_card_line(line: str) -> RequestedCard | None:
     )
 
 
-def parse_card_file(path: Path) -> list[RequestedCard]:
+def parse_decklist_text(text: str) -> list[RequestedCard]:
     cards: list[RequestedCard] = []
-
-    text = _read_text_file(path)
 
     for line in text.splitlines():
         card = parse_card_line(line)
@@ -45,6 +43,10 @@ def parse_card_file(path: Path) -> list[RequestedCard]:
             cards.append(card)
 
     return cards
+
+
+def parse_card_file(path: Path) -> list[RequestedCard]:
+    return parse_decklist_text(_read_text_file(path))
 
 
 def _read_text_file(path: Path) -> str:
