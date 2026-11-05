@@ -49,6 +49,7 @@ class HttpClientConfig:
             "https://silvergoblin.cards/",
             "https://www.hobbiesville.com/",
             "https://facetofacegames.com/",
+            "https://store.wizardtower.com/",
             "https://imaginaire.com/",
         )
     )

@@ -36,7 +36,7 @@ def main() -> None:
         default=["danireon"],
         help=(
             "Stores to check. Supported: danireon, silvergoblin, hobbiesville, "
-            "facetoface, f2f, imaginaire, demo."
+            "facetoface, f2f, wizardtower, wt, imaginaire, demo."
         ),
     )
 

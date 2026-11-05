@@ -12,7 +12,13 @@ type Screen = "setup" | "running" | "results";
 
 const CONDITIONS = ["NM", "LP", "MP", "HP", "DMG"] as const;
 
-const DEFAULT_STORES = ["danireon", "silvergoblin", "facetoface", "hobbiesville"];
+const DEFAULT_STORES = [
+  "danireon",
+  "silvergoblin",
+  "facetoface",
+  "hobbiesville",
+  "wizardtower",
+];
 
 const DONT_BUY = "__dont_buy__";
 

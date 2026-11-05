@@ -34,7 +34,7 @@ class LaunchChromeRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MTG Price Checker", version="0.1.0")
+    app = FastAPI(title="MTG Price Checker", version="0.1.1")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
                 {"store_id": "silvergoblin", "display_name": "Silver Goblin"},
                 {"store_id": "facetoface", "display_name": "Face to Face"},
                 {"store_id": "hobbiesville", "display_name": "Hobbiesville"},
+                {"store_id": "wizardtower", "display_name": "Wizard Tower"},
                 {"store_id": "imaginaire", "display_name": "Imaginaire", "requires_cdp": True},
             ],
             "default_cdp_url": default_cdp_url(),

@@ -28,3 +28,11 @@ def test_build_stores_hobbiesville_defaults() -> None:
     assert len(stores) == 1
     assert stores[0].store_id == "hobbiesville"
     assert stores[0]._max_products_to_check == 12
+
+
+def test_build_stores_wizardtower_defaults() -> None:
+    stores = build_stores(["wizardtower"], options=StoreBuildOptions())
+
+    assert len(stores) == 1
+    assert stores[0].store_id == "wizardtower"
+    assert stores[0]._max_products_to_check == 100
