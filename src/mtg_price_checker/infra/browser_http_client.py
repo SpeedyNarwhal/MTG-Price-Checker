@@ -192,8 +192,7 @@ class BrowserHttpClient:
 
         print(f"Attached browser tab: {self._page.url}")
         print(
-            "When the Imaginaire deck builder is ready in that tab, "
-            "press Enter IN THIS TERMINAL..."
+            "When the Imaginaire deck builder is ready in that tab, press Enter IN THIS TERMINAL..."
         )
         input()
         self._cloudflare_cleared = True

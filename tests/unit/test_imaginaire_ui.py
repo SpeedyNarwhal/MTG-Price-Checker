@@ -359,9 +359,7 @@ def test_wait_for_deck_builder_results_html_accepts_partial_after_timeout(
 
     monkeypatch.setattr("mtg_price_checker.infra.imaginaire_ui.time.monotonic", fake_monotonic)
 
-    html = wait_for_deck_builder_results_html(
-        page, timeout_ms=1000, expected_listing_count=3
-    )
+    html = wait_for_deck_builder_results_html(page, timeout_ms=1000, expected_listing_count=3)
     assert "Sol Ring" in html
 
 
