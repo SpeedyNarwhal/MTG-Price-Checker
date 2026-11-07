@@ -6,6 +6,7 @@ from mtg_price_checker.domain.conditions import parse_min_condition_arg
 from mtg_price_checker.domain.enums import CardCondition
 from mtg_price_checker.input.decklist_parser import parse_card_file
 from mtg_price_checker.output.csv_writer import write_audit_csv, write_price_matrix_csv
+from mtg_price_checker.output.xlsx_writer import write_results_xlsx
 from mtg_price_checker.services.price_checker import check_prices
 from mtg_price_checker.services.store_registry import (
     StoreBuildOptions,
@@ -53,6 +54,13 @@ def main() -> None:
         type=Path,
         default=None,
         help="Optional audit CSV output path with one row per card/store result.",
+    )
+
+    parser.add_argument(
+        "--excel",
+        type=Path,
+        default=None,
+        help="Optional Excel (.xlsx) output path with Prices and Shopping Lists sheets.",
     )
 
     parser.add_argument(
@@ -235,6 +243,16 @@ def main() -> None:
             )
 
             print(f"Wrote audit CSV to {args.audit}")
+
+        if args.excel is not None:
+            write_results_xlsx(
+                output_path=args.excel,
+                requested_cards=requested_cards,
+                stores=stores,
+                results=results,
+            )
+
+            print(f"Wrote Excel workbook to {args.excel}")
     finally:
         close_store_http_clients(stores)
 

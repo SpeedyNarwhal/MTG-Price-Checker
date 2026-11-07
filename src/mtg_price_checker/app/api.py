@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from mtg_price_checker.app.excel_export import ExcelExportError, build_job_excel_bytes
 from mtg_price_checker.app.imaginaire_chrome import (
     cdp_status,
     default_cdp_url,
@@ -33,8 +33,12 @@ class LaunchChromeRequest(BaseModel):
     open_deck_builder: bool = True
 
 
+class ExportExcelRequest(BaseModel):
+    picks: dict[str, str] = Field(default_factory=dict)
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="MTG Price Checker", version="0.1.1")
+    app = FastAPI(title="MTG Price Checker", version="0.2.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -116,6 +120,26 @@ def create_app() -> FastAPI:
                 yield f"data: {json.dumps(event)}\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/api/jobs/{job_id}/export.xlsx")
+    def export_job_excel(job_id: str, body: ExportExcelRequest | None = None) -> Response:
+        job = job_manager.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found.")
+
+        request = body or ExportExcelRequest()
+        try:
+            content = build_job_excel_bytes(job, request.picks or None)
+        except ExcelExportError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        return Response(
+            content=content,
+            media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            headers={
+                "Content-Disposition": 'attachment; filename="mtg-prices.xlsx"',
+            },
+        )
 
     if _STATIC_DIR.is_dir():
         assets_dir = _STATIC_DIR / "assets"

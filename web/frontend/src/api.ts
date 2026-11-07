@@ -64,6 +64,68 @@ export async function cancelJob(jobId: string): Promise<JobSummary> {
   return response.json();
 }
 
+async function desktopBridgeApi(): Promise<DesktopBridgeApi | null> {
+  if (window.pywebview?.api?.save_excel_export) {
+    return window.pywebview.api;
+  }
+  await new Promise<void>((resolve) => {
+    const onReady = () => {
+      window.removeEventListener("pywebviewready", onReady);
+      resolve();
+    };
+    window.addEventListener("pywebviewready", onReady);
+    window.setTimeout(() => {
+      window.removeEventListener("pywebviewready", onReady);
+      resolve();
+    }, 250);
+  });
+  return window.pywebview?.api?.save_excel_export ? window.pywebview.api : null;
+}
+
+type DesktopBridgeApi = NonNullable<NonNullable<Window["pywebview"]>["api"]>;
+
+export async function downloadJobExcel(
+  jobId: string,
+  picks: Record<string, string>,
+): Promise<void> {
+  const inPywebview = typeof window.pywebview !== "undefined";
+  const bridge = await desktopBridgeApi();
+
+  // Desktop shell: blob/<a download> is a no-op in WebView2. Use the native
+  // Save As bridge only — never silently fall back.
+  if (inPywebview || bridge?.save_excel_export) {
+    if (!bridge?.save_excel_export) {
+      throw new Error(
+        "Desktop Excel export is unavailable. Rebuild/restart the app and try again.",
+      );
+    }
+    const result = await bridge.save_excel_export(jobId, picks);
+    if (result.ok || result.cancelled) {
+      return;
+    }
+    throw new Error(result.error ?? "Failed to export Excel.");
+  }
+
+  const response = await fetch(`/api/jobs/${jobId}/export.xlsx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ picks }),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail ?? "Failed to export Excel.");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "mtg-prices.xlsx";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function subscribeJobEvents(
   jobId: string,
   onEvent: (event: JobEvent) => void,

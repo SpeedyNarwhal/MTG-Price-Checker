@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 
 from mtg_price_checker.app.api import create_app
+from mtg_price_checker.desktop.bridge import DesktopApi
 from mtg_price_checker.paths import project_root
 
 _HOST = "127.0.0.1"
@@ -73,12 +74,18 @@ def run_desktop_app(*, open_browser_fallback: bool = True) -> None:
     try:
         import webview
 
+        # Blob / <a download> clicks are ignored unless downloads are enabled;
+        # Excel export still uses the native Save As bridge below.
+        webview.settings["ALLOW_DOWNLOADS"] = True
+
+        api = DesktopApi()
         window_kwargs: dict = {
             "title": "MTG Price Checker",
             "url": url,
             "width": 1280,
             "height": 860,
             "min_size": (960, 640),
+            "js_api": api,
         }
         icon_path = _app_icon_path()
         if icon_path is not None:
@@ -89,8 +96,8 @@ def run_desktop_app(*, open_browser_fallback: bool = True) -> None:
         except TypeError:
             window_kwargs.pop("icon", None)
             window = webview.create_window(**window_kwargs)
+        api.set_window(window)
         webview.start()
-        _ = window
     except Exception as exc:
         if not open_browser_fallback:
             raise

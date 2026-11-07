@@ -22,6 +22,8 @@ Output:
   - chosen product URL
   - notes/errors
 
+- An optional Excel workbook (`--excel` or desktop **Download Excel**) with Prices + Shopping Lists
+
 The project is intentionally modular so new stores can be added independently.
 
 ---
@@ -39,7 +41,7 @@ Parsed by `input/decklist_parser.py`:
 
 # Output Format
 
-Written by `output/csv_writer.py`:
+Written by `output/csv_writer.py` (CSV) and `output/xlsx_writer.py` (Excel):
 
 **Price matrix cells:**
 
@@ -51,6 +53,12 @@ Written by `output/csv_writer.py`:
 
 - Optional; requires `--audit path/to/audit.csv`
 - One row per card/store with status, price, product URL, and notes
+
+**Excel workbook:**
+
+- Optional CLI: `--excel path/to/prices.xlsx`
+- Desktop app: **Download Excel** on the results screen (includes current Buy-at picks)
+- Sheets: `Prices` (Qty + store prices as clickable links + Buy-at dropdown) and `Shopping Lists` (static rows from current Buy-at picks + per-store subtotals)
 
 ---
 
@@ -706,6 +714,7 @@ Entry point: `mtg-prices` (or `python -m mtg_price_checker.cli`).
 | `--min-condition` | `NM` | Worst accepted condition (`NM`, `LP`/`SP`/`PL`, `MP`, `HP`, `DMG`) |
 | `--output` / `-o` | `output/prices.csv` | Price matrix CSV |
 | `--audit` | off | Optional audit CSV path |
+| `--excel` | off | Optional Excel workbook path (Prices + Shopping Lists) |
 | `--max-products-per-card` | per-store defaults | Bulk sets 8 unless overridden |
 | `--request-delay-seconds` | 8.0 accurate / 2.0 bulk | Resolved by `build_cli_run_options()` |
 | `--cache-ttl-hours` | 24 | Cache TTL |

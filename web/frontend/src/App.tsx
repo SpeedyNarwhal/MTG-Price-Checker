@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   cancelJob,
   createJob,
+  downloadJobExcel,
   fetchCdpStatus,
   fetchStores,
   subscribeJobEvents,
@@ -54,8 +55,24 @@ export default function App() {
   const [results, setResults] = useState<JobResults | null>(null);
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [copiedStore, setCopiedStore] = useState<string | null>(null);
+  const [excelDownloading, setExcelDownloading] = useState(false);
 
   const imaginaireSelected = selectedStores.includes("imaginaire");
+
+  async function handleDownloadExcel() {
+    if (!jobId || !results) {
+      return;
+    }
+    setExcelDownloading(true);
+    setError(null);
+    try {
+      await downloadJobExcel(jobId, picks);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExcelDownloading(false);
+    }
+  }
 
   useEffect(() => {
     fetchStores()
@@ -337,6 +354,14 @@ export default function App() {
               <strong>${cartTotal.toFixed(2)} CAD</strong>
             </div>
             <div className="row">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={excelDownloading || !jobId}
+                onClick={() => void handleDownloadExcel()}
+              >
+                {excelDownloading ? "Downloading…" : "Download Excel"}
+              </button>
               <button type="button" className="btn btn-secondary" onClick={() => setScreen("setup")}>
                 New search
               </button>

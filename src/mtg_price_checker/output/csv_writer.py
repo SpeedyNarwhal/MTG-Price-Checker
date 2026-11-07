@@ -1,9 +1,9 @@
 import csv
 from pathlib import Path
 
-from mtg_price_checker.domain.enums import ResultStatus
 from mtg_price_checker.domain.price_result import PriceResult
 from mtg_price_checker.domain.requested_card import RequestedCard
+from mtg_price_checker.output.formatting import format_price_cell
 from mtg_price_checker.stores.base import StoreAdapter
 
 
@@ -26,7 +26,7 @@ def write_price_matrix_csv(
 
             for store in stores:
                 result = results[card.normalized_name][store.store_id]
-                row[store.display_name] = _format_cell(result)
+                row[store.display_name] = format_price_cell(result)
 
             writer.writerow(row)
 
@@ -70,13 +70,3 @@ def write_audit_csv(
                         "Notes": result.notes or "",
                     }
                 )
-
-
-def _format_cell(result: PriceResult) -> str:
-    if result.status == ResultStatus.FOUND and result.lowest_nm_price_cad is not None:
-        return f"${result.lowest_nm_price_cad:.2f}"
-
-    if result.status == ResultStatus.ERROR and result.notes:
-        return f"ERROR: {result.notes}"
-
-    return result.status.value
