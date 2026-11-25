@@ -38,7 +38,7 @@ class ExportExcelRequest(BaseModel):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="MTG Price Checker", version="0.2.0")
+    app = FastAPI(title="MTG Price Checker", version="0.2.1")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
