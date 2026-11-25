@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from mtg_price_checker.infra.browser_http_client import BrowserHttpClient
 from mtg_price_checker.infra.http_client import HttpClientConfig
 
 _IMAGINAIRE_WARMUP_URL = "https://imaginaire.com/fr/magic/constructeur-de-deck.html"
+
+StatusCallback = Callable[[str], None]
 
 
 class ImaginaireHttpClient:
@@ -21,6 +24,15 @@ class ImaginaireHttpClient:
 
         self._config = base_config
         self._browser = BrowserHttpClient(self._config)
+
+    def ensure_cloudflare_cleared(
+        self,
+        warmup_url: str | None = None,
+        *,
+        status_callback: StatusCallback | None = None,
+    ) -> None:
+        target = warmup_url or self._config.cloudflare_warmup_url
+        self._browser.ensure_cloudflare_cleared(target, status_callback=status_callback)
 
     def post_form(
         self,

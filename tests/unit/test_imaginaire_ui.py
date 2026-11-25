@@ -139,7 +139,7 @@ def test_wait_for_cf_stable_returns_when_challenge_absent(monkeypatch) -> None:
     wait_for_cf_stable(page, stable_seconds=3.0, timeout_seconds=10.0)
 
 
-def test_wait_for_cf_stable_skips_when_interactive_ready(monkeypatch) -> None:
+def test_wait_for_cf_stable_skips_when_session_ready(monkeypatch) -> None:
     page = MagicMock()
     slept = False
 
@@ -149,13 +149,55 @@ def test_wait_for_cf_stable_skips_when_interactive_ready(monkeypatch) -> None:
 
     monkeypatch.setattr("mtg_price_checker.infra.imaginaire_ui.time.sleep", fake_sleep)
     monkeypatch.setattr(
-        "mtg_price_checker.infra.imaginaire_ui.is_deck_builder_interactive_ready",
+        "mtg_price_checker.infra.imaginaire_ui.is_imaginaire_session_ready",
         lambda _page: True,
     )
 
     wait_for_cf_stable(page, stable_seconds=3.0, timeout_seconds=10.0)
 
     assert slept is False
+
+
+def test_wait_for_cf_stable_does_not_skip_when_challenge_still_visible(
+    monkeypatch,
+) -> None:
+    page = MagicMock()
+    page.url = "https://imaginaire.com/fr/magic/constructeur-de-deck.html"
+    challenge_checks = {"n": 0}
+
+    def fake_session_ready(_page: object) -> bool:
+        return False
+
+    def fake_challenge(_page: object) -> bool:
+        challenge_checks["n"] += 1
+        return challenge_checks["n"] < 3
+
+    def fake_interactive(_page: object) -> bool:
+        return challenge_checks["n"] >= 3
+
+    times = iter([0.0, 0.5, 1.0, 1.5, 2.0])
+
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.time.monotonic",
+        lambda: next(times, 2.0),
+    )
+    monkeypatch.setattr("mtg_price_checker.infra.imaginaire_ui.time.sleep", lambda _s: None)
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.is_imaginaire_session_ready",
+        fake_session_ready,
+    )
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.is_cloudflare_challenge_visible",
+        fake_challenge,
+    )
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.imaginaire_ui.is_deck_builder_interactive_ready",
+        fake_interactive,
+    )
+
+    wait_for_cf_stable(page, stable_seconds=3.0, timeout_seconds=10.0)
+
+    assert challenge_checks["n"] >= 3
 
 
 def test_submit_and_capture_response_clicks_and_returns_text() -> None:

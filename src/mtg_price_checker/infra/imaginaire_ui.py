@@ -8,6 +8,7 @@ from mtg_price_checker.infra.browser_http_client import (
     is_cloudflare_challenge_visible,
     is_cloudflare_challenge_visible_in_html,
     is_deck_builder_interactive_ready,
+    is_imaginaire_session_ready,
     is_successful_deck_builder_response,
 )
 from mtg_price_checker.stores.imaginaire import (
@@ -189,7 +190,7 @@ def wait_for_cf_stable(
     warmup_url: str | None = None,
     navigate: Any | None = None,
 ) -> None:
-    if is_deck_builder_interactive_ready(page):
+    if is_imaginaire_session_ready(page):
         return
 
     stable_since: float | None = None
@@ -203,6 +204,9 @@ def wait_for_cf_stable(
             stable_since = None
             time.sleep(_CF_STABLE_POLL_SECONDS)
             continue
+
+        if is_deck_builder_interactive_ready(page):
+            return
 
         if stable_since is None:
             stable_since = time.monotonic()

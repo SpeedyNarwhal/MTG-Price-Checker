@@ -7,8 +7,11 @@ from mtg_price_checker.infra.browser_http_client import (
     is_cloudflare_challenge_visible_in_html,
     is_deck_builder_interactive_ready,
     is_deck_builder_ready_in_html,
+    is_imaginaire_session_ready,
+    is_navigation_race_error,
     is_successful_deck_builder_response,
     playwright_cookies_from_file,
+    safe_page_content,
     should_skip_browser_cookie,
 )
 from mtg_price_checker.infra.http_client import HttpClientConfig
@@ -23,7 +26,13 @@ class FakeBrowserClient:
         self.closed = False
         self.can_skip = False
 
-    def ensure_cloudflare_cleared(self, warmup_url: str | None = None) -> None:
+    def ensure_cloudflare_cleared(
+        self,
+        warmup_url: str | None = None,
+        *,
+        status_callback=None,
+    ) -> None:
+        del status_callback
         self.ensure_calls.append(warmup_url)
 
     def post_form(
@@ -213,6 +222,8 @@ def test_interactive_ready_overrides_dormant_cf_markup() -> None:
             wrapper.first = _mock_locator(count=1, visible=True)
         elif selector in ("#cf-turnstile", ".cf-turnstile"):
             wrapper.first = _mock_locator(count=1, visible=False)
+        elif "challenges.cloudflare" in selector:
+            wrapper.first = _mock_locator(count=0, visible=False)
         else:
             wrapper.first = _mock_locator(count=0, visible=False)
         return wrapper
@@ -221,6 +232,132 @@ def test_interactive_ready_overrides_dormant_cf_markup() -> None:
 
     assert is_deck_builder_interactive_ready(page)
     assert not is_cloudflare_challenge_visible(page)
+    assert is_imaginaire_session_ready(page)
+
+
+def test_visible_turnstile_counts_as_challenge_even_when_deck_ui_ready() -> None:
+    page = MagicMock()
+    page.content.return_value = "<html><textarea></textarea><div id='cf-turnstile'></div></html>"
+
+    def locator_side_effect(selector: str) -> MagicMock:
+        wrapper = MagicMock()
+        if selector == "textarea":
+            wrapper.first = _mock_locator(count=1, visible=True)
+        elif selector == "#send2":
+            wrapper.first = _mock_locator(count=1, visible=True)
+        elif selector in ("#cf-turnstile", ".cf-turnstile"):
+            wrapper.first = _mock_locator(count=1, visible=True)
+        else:
+            wrapper.first = _mock_locator(count=0, visible=False)
+        return wrapper
+
+    page.locator.side_effect = locator_side_effect
+
+    assert is_deck_builder_interactive_ready(page)
+    assert is_cloudflare_challenge_visible(page)
+    assert not is_imaginaire_session_ready(page)
+
+
+def test_is_navigation_race_error_detects_playwright_message() -> None:
+    assert is_navigation_race_error(
+        RuntimeError(
+            "Unable to retrieve content because the page is navigating and changing the content."
+        )
+    )
+    assert not is_navigation_race_error(RuntimeError("connection closed"))
+
+
+def test_safe_page_content_retries_through_navigation_race(monkeypatch) -> None:
+    page = MagicMock()
+    page.content.side_effect = [
+        RuntimeError(
+            "Unable to retrieve content because the page is navigating and changing the content."
+        ),
+        "<html>ready</html>",
+    ]
+    page.wait_for_load_state = MagicMock()
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.browser_http_client.time.sleep",
+        lambda _s: None,
+    )
+
+    assert safe_page_content(page) == "<html>ready</html>"
+    page.wait_for_load_state.assert_called()
+
+
+def test_wait_continues_when_page_navigates_after_captcha(monkeypatch) -> None:
+    client = BrowserHttpClient(HttpClientConfig(browser_cdp_url="http://127.0.0.1:9222"))
+    client._page = MagicMock()
+    client._context = MagicMock()
+    statuses: list[str] = []
+    calls = {"n": 0}
+
+    def fake_ready() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError(
+                "Unable to retrieve content because the page is navigating and changing the content."
+            )
+        return calls["n"] >= 3
+
+    monkeypatch.setattr(client, "_is_imaginaire_session_ready", fake_ready)
+    monkeypatch.setattr(client, "_invalidate_stale_cloudflare_cookies_if_needed", lambda: None)
+    monkeypatch.setattr(client, "_cloudflare_status_message", lambda: "status: waiting")
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.browser_http_client.time.sleep",
+        lambda _s: None,
+    )
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.browser_http_client._wait_for_dom_settle",
+        lambda _page, **_k: None,
+    )
+
+    client._wait_until_imaginaire_ready(
+        timeout_seconds=30,
+        status_callback=statuses.append,
+        require_cf_clearance=False,
+    )
+
+    assert calls["n"] >= 3
+    assert any("navigating" in message.lower() for message in statuses)
+
+
+def test_cdp_cloudflare_wait_polls_until_ready_without_input(monkeypatch) -> None:
+    client = BrowserHttpClient(HttpClientConfig(browser_cdp_url="http://127.0.0.1:9222"))
+    client._page = MagicMock()
+    client._page.url = "https://imaginaire.com/fr/magic/constructeur-de-deck.html"
+    client._context = MagicMock()
+    client._uses_cdp = True
+    client._ensure_page = MagicMock()
+
+    ready_after = {"n": 0}
+    statuses: list[str] = []
+
+    def fake_ready() -> bool:
+        ready_after["n"] += 1
+        return ready_after["n"] >= 3
+
+    monkeypatch.setattr(client, "_is_imaginaire_session_ready", fake_ready)
+    monkeypatch.setattr(client, "_invalidate_stale_cloudflare_cookies_if_needed", lambda: None)
+    monkeypatch.setattr(client, "_cloudflare_status_message", lambda: "status: waiting")
+    monkeypatch.setattr(
+        "mtg_price_checker.infra.browser_http_client.time.sleep",
+        lambda _s: None,
+    )
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("input() must not be called")),
+    )
+
+    client.ensure_cloudflare_cleared(
+        "https://imaginaire.com/fr/magic/constructeur-de-deck.html",
+        status_callback=statuses.append,
+    )
+
+    assert client._cloudflare_cleared is True
+    assert ready_after["n"] >= 3
+    assert any("waiting" in message.lower() or "solve" in message.lower() for message in statuses)
+    assert "input()" not in " ".join(statuses)
 
 
 def test_is_deck_builder_interactive_ready_requires_visible_input_and_send2() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,16 @@ _CLOUDFLARE_VERIFY_PATTERNS = (
 )
 _HEADLESS_CF_TIMEOUT_SECONDS = 60
 _HEADED_CF_TIMEOUT_SECONDS = 300
+_CDP_CF_TIMEOUT_SECONDS = 600
+_CF_POLL_SECONDS = 2.0
 _COOKIE_BASE_URL = "https://imaginaire.com"
 _SKIP_BROWSER_COOKIE_NAMES = frozenset({"cf_clearance", "__cf_bm"})
 _CLOUDFLARE_COOKIE_NAMES = frozenset({"cf_clearance", "__cf_bm"})
 _STEALTH_LAUNCH_ARGS = ("--disable-blink-features=AutomationControlled",)
 _STEALTH_IGNORE_DEFAULT_ARGS = ("--enable-automation",)
 _DECK_BUILDER_URL_FRAGMENT = "constructeur-de-deck"
+
+StatusCallback = Callable[[str], None]
 
 
 class BrowserHttpClient:
@@ -115,7 +120,12 @@ class BrowserHttpClient:
 
         return response.text()
 
-    def ensure_cloudflare_cleared(self, warmup_url: str | None = None) -> None:
+    def ensure_cloudflare_cleared(
+        self,
+        warmup_url: str | None = None,
+        *,
+        status_callback: StatusCallback | None = None,
+    ) -> None:
         if self._cloudflare_cleared:
             return
 
@@ -125,37 +135,26 @@ class BrowserHttpClient:
             return
 
         self._ensure_page()
+        report = status_callback or (lambda message: print(message))
 
         if self._config.browser_cdp_url is not None:
-            self._ensure_cdp_cloudflare_cleared()
+            self._ensure_cdp_cloudflare_cleared(status_callback=report)
             return
 
-        if self._can_skip_cloudflare_wait():
-            print("Skipping Cloudflare wait (#send2 and deck input visible).")
-            self._cloudflare_cleared = True
-            return
-
-        if self._config.browser_manual_cf and (
-            not self._config.browser_headless or self._config.browser_cdp_url is not None
-        ):
-            print(f"Attached browser tab: {self._page.url}")
-            print(
-                "When the Imaginaire deck builder is ready in that tab, "
-                "press Enter IN THIS TERMINAL..."
-            )
-            input()
+        if self._is_imaginaire_session_ready():
+            report("Skipping Cloudflare wait (deck builder ready, no challenge visible).")
             self._cloudflare_cleared = True
             return
 
         timeout_seconds = (
             _HEADED_CF_TIMEOUT_SECONDS
-            if (not self._config.browser_headless or self._config.browser_cdp_url)
+            if not self._config.browser_headless
             else _HEADLESS_CF_TIMEOUT_SECONDS
         )
         navigation_timeout_ms = timeout_seconds * 1000
 
-        if not self._config.browser_headless or self._config.browser_cdp_url:
-            print("Solve Cloudflare in the browser window; waiting...")
+        if not self._config.browser_headless:
+            report("Solve Cloudflare in the browser window; waiting...")
 
         if not self._is_on_deck_builder_page():
             self._page.goto(
@@ -164,38 +163,97 @@ class BrowserHttpClient:
                 timeout=navigation_timeout_ms,
             )
 
-        deadline = time.monotonic() + timeout_seconds
-        while time.monotonic() < deadline:
-            self._invalidate_stale_cloudflare_cookies_if_needed()
-
-            if self._is_cloudflare_challenge_cleared():
-                self._cloudflare_cleared = True
-                if not self._config.browser_headless:
-                    print("Cloudflare cleared; ready for deck builder POST.")
-                return
-
-            if not self._config.browser_headless or self._config.browser_cdp_url:
-                print(f"  {self._cloudflare_status_message()}")
-
-            time.sleep(2)
-
-        raise RuntimeError(
-            "Cloudflare challenge did not clear in time. "
-            "Try --browser-headed --browser-manual-cf or --browser-cdp-url."
+        self._wait_until_imaginaire_ready(
+            timeout_seconds=timeout_seconds,
+            status_callback=report,
+            require_cf_clearance=True,
         )
 
-    def _ensure_cdp_cloudflare_cleared(self) -> None:
-        if is_deck_builder_interactive_ready(self._page):
-            print("Skipping Cloudflare wait (#send2 and deck input visible).")
+        if self._config.browser_manual_cf and not self._config.browser_headless:
+            report(
+                "Deck builder looks ready. Press Enter IN THIS TERMINAL to continue..."
+            )
+            input()
+
+        self._cloudflare_cleared = True
+        if not self._config.browser_headless:
+            report("Cloudflare cleared; ready for deck builder POST.")
+
+    def _ensure_cdp_cloudflare_cleared(
+        self,
+        *,
+        status_callback: StatusCallback,
+    ) -> None:
+        if self._is_imaginaire_session_ready():
+            status_callback(
+                "Skipping Cloudflare wait (deck builder ready, no challenge visible)."
+            )
             self._cloudflare_cleared = True
             return
 
-        print(f"Attached browser tab: {self._page.url}")
-        print(
-            "When the Imaginaire deck builder is ready in that tab, press Enter IN THIS TERMINAL..."
+        status_callback(f"Attached browser tab: {self._page.url}")
+        status_callback(
+            "Solve Cloudflare in Chrome if prompted; waiting for the deck builder..."
         )
-        input()
+        self._wait_until_imaginaire_ready(
+            timeout_seconds=_CDP_CF_TIMEOUT_SECONDS,
+            status_callback=status_callback,
+            require_cf_clearance=False,
+        )
+
+        if self._config.browser_manual_cf:
+            status_callback(
+                "Deck builder looks ready. Press Enter IN THIS TERMINAL to continue..."
+            )
+            input()
+
         self._cloudflare_cleared = True
+        status_callback("Cloudflare cleared; ready for deck builder POST.")
+
+    def _wait_until_imaginaire_ready(
+        self,
+        *,
+        timeout_seconds: float,
+        status_callback: StatusCallback,
+        require_cf_clearance: bool,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        last_message = ""
+
+        while time.monotonic() < deadline:
+            try:
+                self._invalidate_stale_cloudflare_cookies_if_needed()
+
+                if require_cf_clearance:
+                    ready = self._is_cloudflare_challenge_cleared()
+                else:
+                    ready = self._is_imaginaire_session_ready()
+            except Exception as exc:
+                if not is_navigation_race_error(exc):
+                    raise
+                message = "status: page navigating after Cloudflare — waiting..."
+                if message != last_message:
+                    status_callback(message)
+                    last_message = message
+                _wait_for_dom_settle(self._page)
+                time.sleep(_CF_POLL_SECONDS)
+                continue
+
+            if ready:
+                return
+
+            message = self._cloudflare_status_message()
+            if message != last_message:
+                status_callback(message)
+                last_message = message
+
+            time.sleep(_CF_POLL_SECONDS)
+
+        raise RuntimeError(
+            "Cloudflare challenge did not clear in time. "
+            "Solve the captcha in Chrome, then retry "
+            "(or use --browser-headed --browser-manual-cf / --browser-cdp-url)."
+        )
 
     def post_deck_builder_via_ui(
         self,
@@ -203,6 +261,7 @@ class BrowserHttpClient:
         data: dict[str, str],
         *,
         referer: str | None = None,
+        status_callback: StatusCallback | None = None,
     ) -> str:
         from mtg_price_checker.infra.imaginaire_ui import (
             CloudflareBlockedResponseError,
@@ -210,10 +269,11 @@ class BrowserHttpClient:
         )
 
         self._ensure_page()
+        report = status_callback or (lambda message: print(message))
 
         warmup_url = self._config.cloudflare_warmup_url or referer
         if warmup_url is not None and not self._cloudflare_cleared:
-            self.ensure_cloudflare_cleared(warmup_url)
+            self.ensure_cloudflare_cleared(warmup_url, status_callback=report)
 
         deck_items_api = data.get("deckItems", "")
         condition = data.get("condition", "NM")
@@ -236,13 +296,28 @@ class BrowserHttpClient:
         except CloudflareBlockedResponseError:
             if self._config.browser_cdp_url is None and self._config.browser_headless:
                 raise
-            print(
+            report(
                 "Cloudflare blocked the deck builder response. "
-                "Solve the challenge in the browser, then press Enter IN THIS TERMINAL to retry..."
+                "Solve the challenge in Chrome; waiting to retry..."
             )
-            input()
+            self._cloudflare_cleared = False
+            self._wait_until_imaginaire_ready(
+                timeout_seconds=(
+                    _CDP_CF_TIMEOUT_SECONDS
+                    if self._config.browser_cdp_url is not None
+                    else _HEADED_CF_TIMEOUT_SECONDS
+                ),
+                status_callback=report,
+                require_cf_clearance=False,
+            )
+            if self._config.browser_manual_cf:
+                report(
+                    "Challenge looks cleared. Press Enter IN THIS TERMINAL to retry..."
+                )
+                input()
             if warmup_url and not self._is_on_deck_builder_page():
                 navigate(warmup_url)
+            self._cloudflare_cleared = True
             return post_deck_builder_via_ui(
                 self._page,
                 deck_items_api=deck_items_api,
@@ -264,11 +339,14 @@ class BrowserHttpClient:
         if self._config.browser_cdp_url is not None or (
             self._should_use_ui_post() and not self._config.browser_headless
         ):
-            return self._is_deck_builder_session_ready()
+            return self._is_imaginaire_session_ready()
         return False
 
     def _can_skip_cloudflare_wait(self) -> bool:
         return self.can_skip_cloudflare_wait()
+
+    def _is_imaginaire_session_ready(self) -> bool:
+        return is_imaginaire_session_ready(self._page)
 
     def _invalidate_stale_cloudflare_cookies_if_needed(self) -> None:
         if self._uses_cdp:
@@ -326,11 +404,6 @@ class BrowserHttpClient:
             return "status: waiting for cf_clearance"
         return "status: waiting for deck builder"
 
-    def _is_deck_builder_session_ready(self) -> bool:
-        if not self._is_on_deck_builder_page():
-            return False
-        return is_deck_builder_interactive_ready(self._page)
-
     def _is_cloudflare_challenge_cleared(self) -> bool:
         if is_cloudflare_challenge_visible(self._page):
             return False
@@ -338,6 +411,9 @@ class BrowserHttpClient:
         cookies = self._context.cookies()
         if not has_cf_clearance_cookie(cookies):
             return False
+
+        if self._is_imaginaire_session_ready():
+            return True
 
         return self._is_on_deck_builder_page() or is_deck_builder_ready(self._page)
 
@@ -598,14 +674,40 @@ def is_successful_deck_builder_response(html: str) -> bool:
     return "card-listing" in lowered or "magictitle" in lowered
 
 
+def is_navigation_race_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "navigating and changing the content" in message or (
+        "page is navigating" in message
+    )
+
+
+def safe_page_content(page: Any, *, retries: int = 3) -> str | None:
+    """Read page HTML, retrying through Cloudflare post-challenge navigations."""
+    last_error: BaseException | None = None
+    for attempt in range(retries):
+        try:
+            return page.content()
+        except Exception as exc:
+            last_error = exc
+            if not is_navigation_race_error(exc):
+                raise
+            _wait_for_dom_settle(page)
+            if attempt + 1 < retries:
+                time.sleep(_CF_POLL_SECONDS)
+    if last_error is not None and not is_navigation_race_error(last_error):
+        raise last_error
+    return None
+
+
+def _wait_for_dom_settle(page: Any, *, timeout_ms: int = 5000) -> None:
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+    except Exception:
+        pass
+
+
 def is_cloudflare_challenge_visible(page: Any) -> bool:
-    if is_deck_builder_interactive_ready(page):
-        return False
-
-    content = page.content()
-    if is_cloudflare_challenge_visible_in_html(content):
-        return True
-
+    # Visible challenge widgets win even when the deck UI is already in the DOM.
     try:
         if _locator_is_visible(page, 'iframe[src*="challenges.cloudflare"]'):
             return True
@@ -613,10 +715,37 @@ def is_cloudflare_challenge_visible(page: Any) -> bool:
             return True
         if _locator_is_visible(page, ".cf-turnstile"):
             return True
-    except Exception:
+    except Exception as exc:
+        if is_navigation_race_error(exc):
+            # Mid-redirect after captcha — keep waiting.
+            return True
+        pass
+
+    content = safe_page_content(page)
+    if content is None:
+        # Could not read HTML while navigating; treat as still clearing.
+        return True
+
+    if not is_cloudflare_challenge_visible_in_html(content):
         return False
 
-    return False
+    # Dormant CF markup can linger after solve; ignore text-only signals once
+    # the deck builder is actually interactive and no widget is visible.
+    if is_deck_builder_interactive_ready(page):
+        return False
+
+    return True
+
+
+def is_imaginaire_session_ready(page: Any) -> bool:
+    try:
+        return is_deck_builder_interactive_ready(
+            page
+        ) and not is_cloudflare_challenge_visible(page)
+    except Exception as exc:
+        if is_navigation_race_error(exc):
+            return False
+        raise
 
 
 def is_deck_builder_interactive_ready(page: Any) -> bool:
@@ -631,7 +760,9 @@ def is_deck_builder_interactive_ready(page: Any) -> bool:
         submit = page.locator("#send2").first
         has_submit = submit.count() > 0 and submit.is_visible()
         return has_input and has_submit
-    except Exception:
+    except Exception as exc:
+        if is_navigation_race_error(exc):
+            return False
         return False
 
 
@@ -644,7 +775,8 @@ def _locator_is_visible(page: Any, selector: str) -> bool:
 
 
 def is_deck_builder_ready(page: Any) -> bool:
-    if is_deck_builder_ready_in_html(page.content()):
+    content = safe_page_content(page)
+    if content is not None and is_deck_builder_ready_in_html(content):
         return True
 
     try:

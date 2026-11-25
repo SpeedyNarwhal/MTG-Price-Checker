@@ -215,6 +215,9 @@ class JobManager:
             )
             stores = build_stores(job.stores, options=options)
 
+            if needs_imaginaire:
+                self._wait_for_imaginaire_cloudflare(job, stores)
+
             def on_progress(event: ProgressEvent) -> None:
                 job.card_index = event.card_index
                 job.total_cards = event.total_cards
@@ -294,6 +297,44 @@ class JobManager:
             with self._lock:
                 if self._active_job_id == job_id:
                     self._active_job_id = None
+
+    def _wait_for_imaginaire_cloudflare(self, job: Job, stores: list[Any]) -> None:
+        imaginaire = next(
+            (store for store in stores if store.store_id.strip().lower() in _IMAGINAIRE_IDS),
+            None,
+        )
+        if imaginaire is None:
+            return
+
+        http_client = getattr(imaginaire, "_http_client", None)
+        ensure = getattr(http_client, "ensure_cloudflare_cleared", None)
+        if not callable(ensure):
+            return
+
+        job.message = "Solve Cloudflare in Chrome if prompted; waiting for Imaginaire…"
+        self._emit(
+            job,
+            {
+                "type": "status",
+                "status": job.status.value,
+                "message": job.message,
+            },
+        )
+
+        def on_status(message: str) -> None:
+            if job.cancel_requested:
+                raise RuntimeError("Cancelled while waiting for Imaginaire Cloudflare.")
+            job.message = message
+            self._emit(
+                job,
+                {
+                    "type": "status",
+                    "status": job.status.value,
+                    "message": message,
+                },
+            )
+
+        ensure(status_callback=on_status)
 
     def _emit(self, job: Job, event: dict[str, Any]) -> None:
         job.events.put(event)
